@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>RV Friendly GPS & Safe Router</title>
+    
+    <!-- Google Fonts: Plus Jakarta Sans & Outfit -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+    
+    <!-- Custom Style Sheet -->
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="dark-theme">
+    <!-- Fullscreen Map Canvas -->
+    <div id="map"></div>
+
+    <!-- Active Safety Banner -->
+    <div id="safety-alert" class="safety-alert hidden">
+        <div class="alert-icon"><i class="fa-solid fa-triangle-exclamation"></i></div>
+        <div class="alert-content">
+            <span class="alert-title">RV Clearance Warning</span>
+            <span class="alert-desc" id="alert-desc-text">Route contains clearance hazards (12' 6") under active profile height (13' 10").</span>
+        </div>
+    </div>
+
+    <!-- Map Floating Controls -->
+    <div class="map-controls">
+        <button id="btn-locate" class="ctrl-btn" title="Locate Me"><i class="fa-solid fa-crosshairs"></i></button>
+        <button id="btn-add-pin-mode" class="ctrl-btn" title="Pin RV-Friendly Parking"><i class="fa-solid fa-map-pin"></i></button>
+        <button id="btn-toggle-layers" class="ctrl-btn" title="Toggle Map Layers"><i class="fa-solid fa-layer-group"></i></button>
+    </div>
+
+    <!-- Instructions Toast for Pin Dropping -->
+    <div id="pin-instruction" class="toast hidden">
+        <i class="fa-solid fa-info-circle"></i> Click anywhere on the map to drop a new RV-friendly parking pin.
+    </div>
+
+    <!-- Offline Download Progress Toast -->
+    <div id="offline-download-progress" class="toast hidden">
+        <i class="fa-solid fa-spinner fa-spin text-safe"></i> <span id="download-progress-text">Downloading offline tiles... 0%</span>
+    </div>
+
+    <!-- Main Sidebar / Bottom Sheet Panel -->
+    <div id="app-panel" class="app-panel collapsed">
+        <!-- Drag Handle for Mobile View -->
+        <div class="drag-handle" id="drag-handle">
+            <div class="handle-bar"></div>
+        </div>
+
+        <div class="panel-content">
+            <!-- App Header -->
+            <header class="app-header">
+                <div class="logo">
+                    <span class="logo-icon"><i class="fa-solid fa-truck-front"></i></span>
+                    <div class="logo-text">
+                        <h1>RV SafeNavigate</h1>
+                        <p>OSM Restriction Engine</p>
+                    </div>
+                </div>
+                <div class="active-profile-badge" id="active-profile-badge">
+                    <i class="fa-solid fa-shield-halved"></i> <span id="badge-name">Standard RV</span>
+                </div>
+            </header>
+
+            <!-- Navigation Tabs -->
+            <nav class="panel-tabs">
+                <button class="tab-btn active" data-tab="tab-routing"><i class="fa-solid fa-route"></i> Route</button>
+                <button class="tab-btn" data-tab="tab-profiles"><i class="fa-solid fa-sliders"></i> Profiles</button>
+                <button class="tab-btn" data-tab="tab-parking"><i class="fa-solid fa-square-parking"></i> Parking</button>
+                <button class="tab-btn" data-tab="tab-saved"><i class="fa-solid fa-bookmark"></i> Saved</button>
+            </nav>
+
+            <!-- Tab Content Container -->
+            <div class="tab-viewport">
+                
+                <!-- ROUTING TAB -->
+                <div id="tab-routing" class="tab-panel active">
+                    <div class="routing-form">
+                        <div class="input-group">
+                            <span class="input-icon"><i class="fa-solid fa-circle-dot start-dot"></i></span>
+                            <div class="input-wrapper">
+                                <input type="text" id="route-start" placeholder="Starting location (or click map)" value="Atlanta, GA">
+                                <ul class="search-suggestions" id="start-suggestions"></ul>
+                            </div>
+                            <button id="btn-gps-start" class="input-action-btn" type="button" title="Use GPS Location"><i class="fa-solid fa-location-arrow"></i></button>
+                        </div>
+                        <div class="input-group">
+                            <span class="input-icon"><i class="fa-solid fa-location-dot end-dot"></i></span>
+                            <div class="input-wrapper">
+                                <input type="text" id="route-end" placeholder="Destination address..." value="Savannah, GA">
+                                <ul class="search-suggestions" id="end-suggestions"></ul>
+                            </div>
+                        </div>
+                        <div class="route-options-row">
+                            <label class="checkbox-option">
+                                <input type="checkbox" id="chk-avoid-interstates">
+                                <span><i class="fa-solid fa-road-barrier"></i> Avoid Interstates (Prefer Scenic/Secondary)</span>
+                            </label>
+                        </div>
+                        <button id="btn-calculate-route" class="btn-primary">
+                            <i class="fa-solid fa-compass-drafting"></i> Calculate Safe Route
+                        </button>
+                    </div>
+
+                    <!-- Route Details & Hazards Output -->
+                    <div id="route-results" class="route-results hidden">
+                        <div class="route-summary">
+                            <div class="stat-col">
+                                <span class="stat-lbl">Distance</span>
+                                <span class="stat-val" id="route-distance">0.0 mi</span>
+                            </div>
+                            <div class="stat-col border-left">
+                                <span class="stat-lbl">Duration</span>
+                                <span class="stat-val" id="route-duration">0h 0m</span>
+                            </div>
+                            <div class="stat-col border-left">
+                                <span class="stat-lbl">Hazards</span>
+                                <span class="stat-val hazard-count" id="route-hazards">0</span>
+                            </div>
+                        </div>
+
+                        <!-- Saved Route Trigger -->
+                        <div class="save-route-row">
+                            <button id="btn-save-this-route" class="btn-secondary btn-sm">
+                                <i class="fa-solid fa-floppy-disk"></i> Save this Route
+                            </button>
+                        </div>
+
+                        <!-- Alternative Route Selector -->
+                        <div id="route-selector-container" class="route-selector-container hidden">
+                            <h4>Available Alternative Routes</h4>
+                            <div id="route-alternatives-list" class="route-alternatives-list">
+                                <!-- Populated dynamically by router.js -->
+                            </div>
+                        </div>
+
+                        <!-- Driving Directions List -->
+                        <div class="directions-section" id="directions-section">
+                            <button type="button" class="directions-collapse-btn" id="btn-toggle-directions">
+                                <span><i class="fa-solid fa-directions"></i> Driving Directions</span>
+                                <i class="fa-solid fa-chevron-down" id="directions-chevron"></i>
+                            </button>
+                            <div class="directions-container hidden" id="directions-container">
+                                <ul id="directions-list" class="directions-list">
+                                    <!-- Populated dynamically by router.js -->
+                                </ul>
+                            </div>
+                        </div>
+
+                        <!-- Hazard Warnings List -->
+                        <div class="hazard-section">
+                            <h3>Route Clearances & Bridges</h3>
+                            <ul id="hazard-list" class="hazard-list">
+                                <li class="no-hazards"><i class="fa-solid fa-circle-check"></i> No restrictions found under your rig specification!</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- PROFILES TAB -->
+                <div id="tab-profiles" class="tab-panel">
+                    <div class="profiles-section">
+                        <!-- Appearance Settings -->
+                        <h3>Appearance Setting</h3>
+                        <div class="theme-selector-container">
+                            <button type="button" class="theme-select-btn" data-theme="light"><i class="fa-solid fa-sun"></i> Day Mode</button>
+                            <button type="button" class="theme-select-btn" data-theme="dark"><i class="fa-solid fa-moon"></i> Night Mode</button>
+                            <button type="button" class="theme-select-btn active" data-theme="system"><i class="fa-solid fa-desktop"></i> System Match</button>
+                        </div>
+                        
+                        <div class="divider"></div>
+
+                        <h3>Active Profiles</h3>
+                        <div class="profile-cards" id="profile-cards-list">
+                            <!-- Populated dynamically by app.js -->
+                        </div>
+
+                        <div class="divider"></div>
+
+                        <h3>Create Rig Profile</h3>
+                        <form id="profile-form" class="profile-form">
+                            <div class="form-row">
+                                <div class="form-group col-12">
+                                    <label for="prof-name">Rig Name</label>
+                                    <input type="text" id="prof-name" placeholder="e.g., Grand Design Solitude 390RK" required>
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group col-6">
+                                    <label for="prof-height-ft">Height (Feet)</label>
+                                    <input type="number" id="prof-height-ft" min="1" max="25" step="1" value="13" required>
+                                </div>
+                                <div class="form-group col-6">
+                                    <label for="prof-height-in">Height (Inches)</label>
+                                    <input type="number" id="prof-height-in" min="0" max="11" step="1" value="6" required>
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group col-6">
+                                    <label for="prof-weight">Weight (lbs)</label>
+                                    <input type="number" id="prof-weight" min="1" step="100" value="24000" required>
+                                </div>
+                                <div class="form-group col-6">
+                                    <label for="prof-length">Length (Feet)</label>
+                                    <input type="number" id="prof-length" min="1" step="1" value="40" required>
+                                </div>
+                            </div>
+
+                            <!-- Buffer Demonstration Label -->
+                            <div class="buffer-info-box">
+                                <div class="buffer-title"><i class="fa-solid fa-shield-cat"></i> Auto Safety Buffers Applied:</div>
+                                <ul>
+                                    <li>Height buffer: <strong class="buffer-text">+4 inches</strong> (contingency for repaving/tires)</li>
+                                    <li>Weight buffer: <strong class="buffer-text">+5%</strong> (for tanks, supplies, equipment)</li>
+                                </ul>
+                                <div class="buffered-preview">
+                                    Buffered Height: <span id="preview-buffered-height">13' 10"</span><br>
+                                    Buffered Weight: <span id="preview-buffered-weight">25,200 lbs</span>
+                                </div>
+                            </div>
+
+                            <button type="submit" class="btn-primary">
+                                <i class="fa-solid fa-plus"></i> Save Vehicle Profile
+                            </button>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- PARKING TAB -->
+                <div id="tab-parking" class="tab-panel">
+                    <div class="parking-section">
+                        <h3>Amenities & Parking Layers</h3>
+                        <p class="section-desc">Toggle markers to show verified truck stops, rest areas, and community-sourced RV friendly parking locations.</p>
+                        
+                        <div class="filter-toggles">
+                            <label class="filter-item">
+                                <input type="checkbox" id="layer-truck-stops" checked>
+                                <span class="filter-pill pill-truckstop"><i class="fa-solid fa-gas-pump"></i> Truck Stops (OSM)</span>
+                            </label>
+                            <label class="filter-item">
+                                <input type="checkbox" id="layer-rest-areas" checked>
+                                <span class="filter-pill pill-restarea"><i class="fa-solid fa-tree"></i> Rest Areas (OSM)</span>
+                            </label>
+                            <label class="filter-item">
+                                <input type="checkbox" id="layer-custom-pins" checked>
+                                <span class="filter-pill pill-community"><i class="fa-solid fa-users"></i> Crowdsourced Spots</span>
+                            </label>
+                        </div>
+
+                        <div class="divider"></div>
+
+                        <h3>Submit Crowdsourced Parking</h3>
+                        <p class="section-desc">Help the RV community. Switch on pin mode, click on the map where the lot is, and fill out details.</p>
+                        
+                        <button id="btn-start-pin-drop" class="btn-secondary">
+                            <i class="fa-solid fa-location-crosshairs"></i> Select Spot on Map
+                        </button>
+
+                        <!-- Hidden Submission Form (appears after placing pin) -->
+                        <div id="parking-submission-form" class="parking-form-wrapper hidden">
+                            <div class="submission-coordinates">
+                                Selected Location: <span id="submit-coords">32.6454, -85.3789</span>
+                            </div>
+                            <div class="form-group">
+                                <label for="parking-type">Parking Type</label>
+                                <select id="parking-type">
+                                    <option value="retail">Walmart / Cabela's / Retail Lot</option>
+                                    <option value="rest_area">Rest Area / Truck Stop</option>
+                                    <option value="boondock">Dispersed / Boondocking</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>Rig Accommodations</label>
+                                <div class="checkbox-group">
+                                    <label><input type="checkbox" id="acc-bigrig" checked> Can fit Big Rigs (40ft+)</label>
+                                    <label><input type="checkbox" id="acc-turning" checked> Easy In/Out Turning Radius</label>
+                                    <label><input type="checkbox" id="acc-overnight" checked> Overnight Allowed</label>
+                                    <label><input type="checkbox" id="acc-services"> Water/Dump Station Available</label>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label for="parking-notes">User Notes</label>
+                                <textarea id="parking-notes" placeholder="e.g., Huge quiet lot behind fuel pumps. Highly accessible." rows="3"></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label for="parking-photo">Upload Photo of Area</label>
+                                <div class="file-upload-wrapper">
+                                    <input type="file" id="parking-photo" accept="image/*" class="file-input">
+                                    <div class="file-upload-preview-container hidden" id="parking-photo-preview-container">
+                                        <img id="parking-photo-preview" src="" alt="Upload Preview">
+                                        <button type="button" id="btn-remove-photo" class="btn-remove-photo"><i class="fa-solid fa-xmark"></i></button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="button-row">
+                                <button id="btn-submit-parking" class="btn-primary btn-sm">Submit to Community Map</button>
+                                <button id="btn-cancel-parking" class="btn-outline btn-sm">Cancel</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SAVED TAB -->
+                <div id="tab-saved" class="tab-panel">
+                    <div class="saved-section">
+                        <h3>Your Saved Routes</h3>
+                        <p class="section-desc">Access your stored trip paths. These paths bypass low clearances and weight restrictions calculated using your safety buffers.</p>
+                        
+                        <div class="saved-routes-list" id="saved-routes-list">
+                            <!-- Dynamically populated -->
+                            <div class="empty-list">
+                                <i class="fa-solid fa-route"></i>
+                                <p>No saved routes yet. Create a route, verify clearances, and click "Save this Route" to build your log.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    
+    <!-- Application Scripts -->
+    <script src="app.js"></script>
+    <script src="router.js"></script>
+    <script src="parking.js"></script>
+</body>
+</html>
