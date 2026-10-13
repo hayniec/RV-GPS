@@ -268,6 +268,16 @@ function submitCustomParkingPin() {
     state.customParkingSpots.push(newSpot);
     saveCustomParkingSpots();
     
+    // Sync to cloud or queue for offline sync
+    if (window.AuthManager) {
+        const isOnline = window.NativeBridge ? window.NativeBridge.networkStatus.connected : (navigator.onLine !== undefined ? navigator.onLine : true);
+        if (!isOnline) {
+            window.AuthManager.queueOfflineLocation(newSpot);
+        } else {
+            window.AuthManager.syncCloudData();
+        }
+    }
+    
     // Clean up interface
     exitPinDropMode();
     renderAllParkingMarkers();

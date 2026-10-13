@@ -87,28 +87,42 @@ function initMap() {
         }
     });
     
-    // Create base layers
-    state.baseLayers.dark = new OfflineTileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-        subdomains: 'abcd',
+    // Purge any legacy watermarked CartoDB tiles from browser cache
+    if (window.caches) {
+        caches.open('rv-offline-tiles').then(cache => {
+            cache.keys().then(keys => {
+                keys.forEach(req => {
+                    if (req.url.includes('cartocdn.com')) {
+                        cache.delete(req);
+                    }
+                });
+            });
+        }).catch(() => {});
+    }
+
+    // Stadia Maps API Key integration (defaults to user's registered key)
+    const stadiaKey = (window.APP_CONFIG && window.APP_CONFIG.STADIA_API_KEY) || 'ef319d5b-9638-4458-ac68-911cc881fba3';
+    const stadiaAttr = '&copy; <a href="https://stadiamaps.com/" target="_blank">Stadia Maps</a> &copy; <a href="https://openmaptiles.org/" target="_blank">OpenMapTiles</a> &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>';
+
+    // Create high-resolution Stadia base layers
+    state.baseLayers.dark = new OfflineTileLayer(`https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png?api_key=${stadiaKey}`, {
+        attribution: stadiaAttr,
         maxZoom: 20
     });
     
-    state.baseLayers.light = new OfflineTileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-        subdomains: 'abcd',
+    state.baseLayers.light = new OfflineTileLayer(`https://tiles.stadiamaps.com/tiles/alidade_smooth/{z}/{x}/{y}{r}.png?api_key=${stadiaKey}`, {
+        attribution: stadiaAttr,
         maxZoom: 20
     });
-    
-    state.baseLayers.satellite = new OfflineTileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-        attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
-        maxZoom: 18
+
+    state.baseLayers.topo = new OfflineTileLayer(`https://tiles.stadiamaps.com/tiles/outdoors/{z}/{x}/{y}{r}.png?api_key=${stadiaKey}`, {
+        attribution: stadiaAttr,
+        maxZoom: 20
     });
-    
-    state.baseLayers.topo = new OfflineTileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
-        attribution: 'Map data: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, <a href="http://viewfinderpanoramas.org">SRTM</a> | Map style: &copy; <a href="https://opentopomap.org">OpenTopoMap</a>',
-        subdomains: 'abc',
-        maxZoom: 17
+
+    state.baseLayers.satellite = new OfflineTileLayer(`https://tiles.stadiamaps.com/tiles/alidade_satellite/{z}/{x}/{y}{r}.jpg?api_key=${stadiaKey}`, {
+        attribution: '&copy; CNES, Distribution Airbus DS, © Airbus DS, © PlanetObserver (Contains Copernicus Data) | &copy; <a href="https://stadiamaps.com/">Stadia Maps</a>',
+        maxZoom: 20
     });
     
     // Default base layer tracker name
@@ -125,6 +139,21 @@ function initProfiles() {
     const stored = localStorage.getItem("rv_profiles");
     if (stored) {
         state.profiles = JSON.parse(stored);
+        // Ensure new width/wind fields exist on loaded profiles
+        state.profiles.forEach(p => {
+            if (p.widthFt === undefined) p.widthFt = 8;
+            if (p.widthIn === undefined) p.widthIn = 6;
+            if (p.windThresholdMph === undefined) p.windThresholdMph = 25;
+            
+            // Recalculate buffers just in case
+            const buf = calculateBuffer(p.heightFt, p.heightIn, p.weight, p.widthFt, p.widthIn);
+            p.bufferedHeightFt = buf.bufferedHeightFt;
+            p.bufferedHeightIn = buf.bufferedHeightIn;
+            p.bufferedWeight = buf.bufferedWeight;
+            p.bufferedWidthFt = buf.bufferedWidthFt;
+            p.bufferedWidthIn = buf.bufferedWidthIn;
+        });
+        saveProfiles();
     } else {
         // Seed default rig profiles (as described in Phase 2 blueprint)
         state.profiles = [
@@ -135,9 +164,14 @@ function initProfiles() {
                 heightIn: 6,
                 weight: 16800, // dry weight
                 length: 41,
+                widthFt: 8,
+                widthIn: 6,
+                windThresholdMph: 25,
                 bufferedHeightFt: 13,
                 bufferedHeightIn: 10, // +4 inches
-                bufferedWeight: 17640  // +5%
+                bufferedWeight: 17640,  // +5%
+                bufferedWidthFt: 8,
+                bufferedWidthIn: 8 // +2 inches
             },
             {
                 id: "prof-2",
@@ -146,9 +180,14 @@ function initProfiles() {
                 heightIn: 8,
                 weight: 8000,
                 length: 22,
+                widthFt: 6,
+                widthIn: 8,
+                windThresholdMph: 40,
                 bufferedHeightFt: 7,
                 bufferedHeightIn: 0,  // +4 inches
-                bufferedWeight: 8400   // +5%
+                bufferedWeight: 8400,   // +5%
+                bufferedWidthFt: 6,
+                bufferedWidthIn: 10 // +2 inches
             }
         ];
         saveProfiles();
@@ -170,7 +209,7 @@ function saveProfiles() {
     localStorage.setItem("rv_profiles", JSON.stringify(state.profiles));
 }
 
-function calculateBuffer(heightFt, heightIn, weightLbs) {
+function calculateBuffer(heightFt, heightIn, weightLbs, widthFt, widthIn) {
     // Programmatic safety buffer to height (+4 inches)
     let totalInches = (parseInt(heightFt) * 12) + parseInt(heightIn) + 4;
     const bufFt = Math.floor(totalInches / 12);
@@ -179,10 +218,17 @@ function calculateBuffer(heightFt, heightIn, weightLbs) {
     // Programmatic safety buffer to weight (+5% to account for water, supplies, etc.)
     const bufWeight = Math.round(parseInt(weightLbs) * 1.05);
     
+    // Programmatic safety buffer to width (+2 inches)
+    let totalWidthInches = (parseInt(widthFt || 8) * 12) + parseInt(widthIn || 6) + 2;
+    const bufWidthFt = Math.floor(totalWidthInches / 12);
+    const bufWidthIn = totalWidthInches % 12;
+    
     return {
         bufferedHeightFt: bufFt,
         bufferedHeightIn: bufIn,
-        bufferedWeight: bufWeight
+        bufferedWeight: bufWeight,
+        bufferedWidthFt: bufWidthFt,
+        bufferedWidthIn: bufWidthIn
     };
 }
 
@@ -203,8 +249,10 @@ function renderProfiles() {
                 <h4>${prof.name} ${isActive ? '<span class="prof-badge-lbl">Active</span>' : ''}</h4>
                 <div class="prof-specs">
                     <span><i class="fa-solid fa-arrows-up-down"></i> Max Height: ${prof.heightFt}' ${prof.heightIn}" <strong>(Buf: ${prof.bufferedHeightFt}' ${prof.bufferedHeightIn}")</strong></span><br>
+                    <span><i class="fa-solid fa-arrows-left-right"></i> Max Width: ${prof.widthFt}' ${prof.widthIn}" <strong>(Buf: ${prof.bufferedWidthFt}' ${prof.bufferedWidthIn}")</strong></span><br>
                     <span><i class="fa-solid fa-weight-hanging"></i> Weight: ${prof.weight.toLocaleString()} lbs <strong>(Buf: ${prof.bufferedWeight.toLocaleString()} lbs)</strong></span><br>
-                    <span><i class="fa-solid fa-ruler-horizontal"></i> Length: ${prof.length} ft</span>
+                    <span><i class="fa-solid fa-ruler-horizontal"></i> Length: ${prof.length} ft</span> • 
+                    <span><i class="fa-solid fa-wind"></i> Wind Limit: ${prof.windThresholdMph} mph</span>
                 </div>
             </div>
             ${state.profiles.length > 1 ? `
@@ -260,8 +308,27 @@ function deleteProfile(id) {
 
 function updateActiveProfileBadge() {
     const current = state.profiles.find(p => p.id === state.activeProfileId);
-    if (current) {
-        document.getElementById("badge-name").textContent = current.name.split(" (")[0];
+    if (!current) return;
+
+    const badgeName = document.getElementById("badge-name");
+    if (badgeName) {
+        badgeName.textContent = current.name.split(" (")[0];
+    }
+
+    // Populate and sync Header Rig Dropdown Select
+    const select = document.getElementById("header-rig-select");
+    if (select) {
+        select.innerHTML = state.profiles.map(p => 
+            `<option value="${p.id}" ${p.id === current.id ? 'selected' : ''}>${p.name}</option>`
+        ).join('');
+    }
+
+    // Update specs summary line in Header Rig Bar
+    const specsEl = document.getElementById("header-rig-specs");
+    if (specsEl) {
+        const heightBuf = `${current.bufferedHeightFt || current.heightFt}' ${current.bufferedHeightIn || current.heightIn}"`;
+        const weightBuf = (current.bufferedWeight || current.weight || 0).toLocaleString();
+        specsEl.innerHTML = `<strong>${heightBuf} H</strong> (buffered) • ${weightBuf} lbs • ${current.length || 35}' L • ${current.windThresholdMph || 25} mph wind`;
     }
 }
 
@@ -334,6 +401,10 @@ function renderSavedRoutes() {
             e.stopPropagation();
             if (isDownloaded) {
                 alert("Offline map tiles are already downloaded for this route.");
+                return;
+            }
+            const downloadedCount = state.savedRoutes.filter(r => r.offlineDownloaded).length;
+            if (window.AuthManager && !window.AuthManager.checkCanDownloadOffline(downloadedCount)) {
                 return;
             }
             downloadRouteMapOffline(route, idx);
@@ -437,9 +508,12 @@ function setupEventListeners() {
             const heightIn = parseInt(document.getElementById("prof-height-in").value);
             const weight = parseInt(document.getElementById("prof-weight").value);
             const length = parseInt(document.getElementById("prof-length").value);
+            const widthFt = parseInt(document.getElementById("prof-width-ft").value);
+            const widthIn = parseInt(document.getElementById("prof-width-in").value);
+            const windThresholdMph = parseInt(document.getElementById("prof-wind-threshold").value);
             
             // Calculate buffers
-            const buffers = calculateBuffer(heightFt, heightIn, weight);
+            const buffers = calculateBuffer(heightFt, heightIn, weight, widthFt, widthIn);
             
             const newProfile = {
                 id: "prof-" + Date.now(),
@@ -448,6 +522,9 @@ function setupEventListeners() {
                 heightIn: heightIn,
                 weight: weight,
                 length: length,
+                widthFt: widthFt,
+                widthIn: widthIn,
+                windThresholdMph: windThresholdMph,
                 ...buffers
             };
             
@@ -467,6 +544,87 @@ function setupEventListeners() {
         document.getElementById("prof-height-ft").addEventListener("input", updateFormBufferPreview);
         document.getElementById("prof-height-in").addEventListener("input", updateFormBufferPreview);
         document.getElementById("prof-weight").addEventListener("input", updateFormBufferPreview);
+        document.getElementById("prof-width-ft").addEventListener("input", updateFormBufferPreview);
+        document.getElementById("prof-width-in").addEventListener("input", updateFormBufferPreview);
+    }
+    
+    // Header Rig Dropdown Switcher
+    const rigSelect = document.getElementById("header-rig-select");
+    if (rigSelect) {
+        rigSelect.addEventListener("change", (e) => {
+            setActiveProfile(e.target.value);
+            if (typeof showMapLayerNotification === 'function') {
+                const cur = state.profiles.find(p => p.id === e.target.value);
+                if (cur) showMapLayerNotification(`Switched active rig to: ${cur.name.split(' (')[0]}`);
+            }
+        });
+    }
+
+    // Quick Create Rig Modal Handlers
+    const quickNewRigBtn = document.getElementById("btn-quick-new-rig");
+    const quickRigModal = document.getElementById("modal-quick-new-rig");
+    const closeQuickRigBtn = document.getElementById("btn-close-quick-rig-modal");
+    const cancelQuickRigBtn = document.getElementById("btn-cancel-quick-rig");
+    const quickRigForm = document.getElementById("quick-rig-form");
+
+    if (quickNewRigBtn && quickRigModal) {
+        quickNewRigBtn.addEventListener("click", () => {
+            quickRigModal.classList.remove("hidden");
+            const nameInput = document.getElementById("quick-prof-name");
+            if (nameInput) setTimeout(() => nameInput.focus(), 100);
+        });
+    }
+
+    const hideQuickRigModal = () => {
+        if (quickRigModal) quickRigModal.classList.add("hidden");
+    };
+
+    if (closeQuickRigBtn) closeQuickRigBtn.addEventListener("click", hideQuickRigModal);
+    if (cancelQuickRigBtn) cancelQuickRigBtn.addEventListener("click", hideQuickRigModal);
+    if (quickRigModal) {
+        quickRigModal.addEventListener("click", (e) => {
+            if (e.target === quickRigModal) hideQuickRigModal();
+        });
+    }
+
+    if (quickRigForm) {
+        quickRigForm.addEventListener("submit", (e) => {
+            e.preventDefault();
+            const name = document.getElementById("quick-prof-name").value.trim();
+            const heightFt = parseInt(document.getElementById("quick-prof-height-ft").value);
+            const heightIn = parseInt(document.getElementById("quick-prof-height-in").value || 0);
+            const weight = parseInt(document.getElementById("quick-prof-weight").value);
+            const length = parseInt(document.getElementById("quick-prof-length").value || 35);
+            const widthFt = parseInt(document.getElementById("quick-prof-width-ft").value || 8);
+            const widthIn = parseInt(document.getElementById("quick-prof-width-in").value || 6);
+            const windThresholdMph = parseInt(document.getElementById("quick-prof-wind-threshold").value || 25);
+
+            const buffers = calculateBuffer(heightFt, heightIn, weight, widthFt, widthIn);
+            const newProfile = {
+                id: "prof-" + Date.now(),
+                name: name,
+                heightFt: heightFt,
+                heightIn: heightIn,
+                weight: weight,
+                length: length,
+                widthFt: widthFt,
+                widthIn: widthIn,
+                windThresholdMph: windThresholdMph,
+                ...buffers
+            };
+
+            state.profiles.push(newProfile);
+            saveProfiles();
+            renderProfiles();
+            setActiveProfile(newProfile.id);
+
+            quickRigForm.reset();
+            hideQuickRigModal();
+
+            if (typeof showMapLayerNotification === 'function') {
+                showMapLayerNotification(`Active Rig created: ${name}`);
+            }
+        });
     }
     
     // Geolocation Floating button
@@ -635,17 +793,22 @@ function updateFormBufferPreview() {
     const ftInput = document.getElementById("prof-height-ft");
     const inInput = document.getElementById("prof-height-in");
     const wtInput = document.getElementById("prof-weight");
+    const wFtInput = document.getElementById("prof-width-ft");
+    const wInInput = document.getElementById("prof-width-in");
     
-    if (!ftInput || !inInput || !wtInput) return;
+    if (!ftInput || !inInput || !wtInput || !wFtInput || !wInInput) return;
     
     const ft = parseInt(ftInput.value || 0);
     const inch = parseInt(inInput.value || 0);
     const wt = parseInt(wtInput.value || 0);
+    const wFt = parseInt(wFtInput.value || 0);
+    const wIn = parseInt(wInInput.value || 0);
     
-    const previews = calculateBuffer(ft, inch, wt);
+    const previews = calculateBuffer(ft, inch, wt, wFt, wIn);
     
     document.getElementById("preview-buffered-height").textContent = `${previews.bufferedHeightFt}' ${previews.bufferedHeightIn}"`;
     document.getElementById("preview-buffered-weight").textContent = `${previews.bufferedWeight.toLocaleString()} lbs`;
+    document.getElementById("preview-buffered-width").textContent = `${previews.bufferedWidthFt}' ${previews.bufferedWidthIn}"`;
 }
 
 // OFFLINE MAP TILE DOWNLOADER (Phase 6 Bounding Box Calculation)

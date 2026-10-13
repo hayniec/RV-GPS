@@ -1,0 +1,31 @@
+{
+  "name": "rv-gps",
+  "version": "1.0.0",
+  "description": "A premium, responsive, dark-theme web application designed to navigate RV rigs safely by calculating routing geometries, intersecting paths with low clearances and bridge weight hazards, and sourcing parking amenities.",
+  "main": "app.js",
+  "scripts": {
+    "build": "node build.js",
+    "sync": "node build.js && npx cap sync",
+    "add:ios": "npx cap add ios",
+    "add:android": "npx cap add android",
+    "open:ios": "npx cap open ios",
+    "open:android": "npx cap open android",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@capacitor/android": "^8.5.3",
+    "@capacitor/app": "^8.1.2",
+    "@capacitor/cli": "^8.5.3",
+    "@capacitor/core": "^8.5.3",
+    "@capacitor/filesystem": "^8.1.4",
+    "@capacitor/geolocation": "^8.2.3",
+    "@capacitor/haptics": "^8.0.2",
+    "@capacitor/ios": "^8.5.3",
+    "@capacitor/network": "^8.0.1",
+    "@capacitor/preferences": "^8.0.1",
+    "@capacitor/status-bar": "^8.0.4"
+  }
+}

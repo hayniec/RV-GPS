@@ -60,6 +60,36 @@ const HAZARDS_DATABASE = [
         limitFt: 13,
         limitIn: 2,
         desc: "CSX Rail underpass. Clearance warning signs active."
+    },
+    {
+        id: "hz-7",
+        name: "State Route 198 Narrow Bridge",
+        lat: 32.5512,
+        lng: -82.9015,
+        type: "width",
+        limitFt: 8,
+        limitIn: 4,
+        desc: "Historic narrow concrete bridge over local creek. Extreme caution for double-wide vehicles or large travel trailers."
+    },
+    {
+        id: "hz-8",
+        name: "Tallulah Gorge Loop Narrow Roadway",
+        lat: 34.7392,
+        lng: -83.3902,
+        type: "width",
+        limitFt: 8,
+        limitIn: 2,
+        desc: "Winding state route with vertical rock faces and narrow lanes. RVs exceed safe lane limits."
+    },
+    {
+        id: "hz-9",
+        name: "Savannah Canal Street Historic Lane",
+        lat: 32.0722,
+        lng: -81.1022,
+        type: "width",
+        limitFt: 8,
+        limitIn: 0,
+        desc: "Cobblestone road section bordered by iron fences. Restricted lane width."
     }
 ];
 
@@ -108,9 +138,45 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         });
     }
+
+    // Auto-recalculate route when Avoid Interstates toggle changes
+    const avoidInterstatesChk = document.getElementById("chk-avoid-interstates");
+    if (avoidInterstatesChk) {
+        avoidInterstatesChk.addEventListener("change", () => {
+            if (startLatLng && endLatLng) {
+                calculateSafeRoute();
+            }
+        });
+    }
 });
 
-// NOMINATIM GEOLOCATION AUTOCOMPLETE
+// POLYLINE6 DECODER FOR VALHALLA ROUTING GEOMETRY
+function decodeValhallaPolyline6(str) {
+    let index = 0, lat = 0, lng = 0, coordinates = [];
+    while (index < str.length) {
+        let b, shift = 0, result = 0;
+        do {
+            b = str.charCodeAt(index++) - 63;
+            result |= (b & 0x1f) << shift;
+            shift += 5;
+        } while (b >= 0x20);
+        lat += ((result & 1) ? ~(result >> 1) : (result >> 1));
+
+        shift = 0;
+        result = 0;
+        do {
+            b = str.charCodeAt(index++) - 63;
+            result |= (b & 0x1f) << shift;
+            shift += 5;
+        } while (b >= 0x20);
+        lng += ((result & 1) ? ~(result >> 1) : (result >> 1));
+
+        coordinates.push([lat * 1e-6, lng * 1e-6]);
+    }
+    return coordinates;
+}
+
+// GEOLOCATION AUTOCOMPLETE (Stadia Pelias with Nominatim Fallback)
 function setupInputSuggestions(inputId, suggestionListId, selectCallback) {
     const input = document.getElementById(inputId);
     const list = document.getElementById(suggestionListId);
@@ -127,32 +193,72 @@ function setupInputSuggestions(inputId, suggestionListId, selectCallback) {
         }
         
         geocodeDebounceTimer = setTimeout(() => {
-            fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5&countrycodes=us`)
-                .then(res => res.json())
-                .then(data => {
-                    list.innerHTML = "";
-                    if (data.length === 0) {
-                        list.classList.remove("show");
-                        return;
-                    }
-                    
-                    data.forEach(item => {
-                        const li = document.createElement("li");
-                        li.innerHTML = `<i class="fa-solid fa-map-location-dot"></i> <span>${item.display_name}</span>`;
-                        li.addEventListener("click", () => {
-                            input.value = item.display_name;
+            const stadiaKey = window.APP_CONFIG?.STADIA_API_KEY;
+            
+            if (stadiaKey) {
+                // High-speed Stadia Pelias search with USA boundary preference
+                fetch(`https://api.stadiamaps.com/geocoding/v1/autocomplete?api_key=${stadiaKey}&text=${encodeURIComponent(query)}&boundary.country=USA`)
+                    .then(res => res.json())
+                    .then(data => {
+                        list.innerHTML = "";
+                        const features = data.features || [];
+                        if (features.length === 0) {
                             list.classList.remove("show");
-                            selectCallback(parseFloat(item.lat), parseFloat(item.lon));
+                            return;
+                        }
+                        
+                        features.forEach(feat => {
+                            const label = feat.properties?.label || feat.properties?.name || "Unknown Location";
+                            const lon = feat.geometry?.coordinates[0];
+                            const lat = feat.geometry?.coordinates[1];
+                            
+                            const li = document.createElement("li");
+                            li.innerHTML = `<i class="fa-solid fa-map-location-dot"></i> <span>${label}</span>`;
+                            li.addEventListener("click", () => {
+                                input.value = label;
+                                list.classList.remove("show");
+                                selectCallback(parseFloat(lat), parseFloat(lon));
+                            });
+                            list.appendChild(li);
                         });
-                        list.appendChild(li);
+                        list.classList.add("show");
+                    })
+                    .catch(err => {
+                        console.warn("Stadia autocomplete error, trying Nominatim fallback:", err);
+                        fetchNominatimFallback(query, list, input, selectCallback);
                     });
-                    list.classList.add("show");
-                })
-                .catch(err => {
-                    console.error("Geocoding fetch error:", err);
-                });
-        }, 400); // 400ms debounce
+            } else {
+                fetchNominatimFallback(query, list, input, selectCallback);
+            }
+        }, 300); // 300ms debounce
     });
+
+    function fetchNominatimFallback(query, list, input, selectCallback) {
+        fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5&countrycodes=us`)
+            .then(res => res.json())
+            .then(data => {
+                list.innerHTML = "";
+                if (!data || data.length === 0) {
+                    list.classList.remove("show");
+                    return;
+                }
+                
+                data.forEach(item => {
+                    const li = document.createElement("li");
+                    li.innerHTML = `<i class="fa-solid fa-map-location-dot"></i> <span>${item.display_name}</span>`;
+                    li.addEventListener("click", () => {
+                        input.value = item.display_name;
+                        list.classList.remove("show");
+                        selectCallback(parseFloat(item.lat), parseFloat(item.lon));
+                    });
+                    list.appendChild(li);
+                });
+                list.classList.add("show");
+            })
+            .catch(err => {
+                console.error("Geocoding fetch error:", err);
+            });
+    }
     
     // Close suggestions on outside click
     document.addEventListener("click", (e) => {
@@ -167,26 +273,82 @@ window.setStartLatLng = function(lat, lng) {
     startLatLng = [lat, lng];
 };
 
-// SCENIC DETOUR MIDPOINT SELECTOR
-function getScenicDetourWaypoint(start, end) {
-    // Direct check for our main Atlanta <-> Savannah corridor
-    const isAtlSav = (Math.abs(start[0] - 33.7490) < 0.5 && Math.abs(end[0] - 32.0835) < 0.5) ||
-                     (Math.abs(start[0] - 32.0835) < 0.5 && Math.abs(end[0] - 33.7490) < 0.5);
-    if (isAtlSav) {
-        return [32.7230, -82.4110]; // Swainsboro GA on US-80
+// HELPER: Convert Valhalla trip object to standard route format
+function formatValhallaTrip(tripObj, customName) {
+    if (!tripObj?.legs?.[0]?.shape) return null;
+    const shapeCoords = decodeValhallaPolyline6(tripObj.legs[0].shape);
+    const hasHwy = tripObj.summary ? tripObj.summary.has_highway : false;
+    return {
+        geometry: {
+            coordinates: shapeCoords.map(c => [c[1], c[0]])
+        },
+        distance: (tripObj.summary?.length || 0) * 1609.34,
+        duration: tripObj.summary?.time || 0,
+        isValhallaTruck: true,
+        hasHighway: hasHwy,
+        customName: customName,
+        legs: tripObj.legs.map(leg => ({
+            steps: (leg.maneuvers || []).map(m => ({
+                name: m.street_names ? m.street_names.join(" / ") : (m.instruction || ""),
+                distance: (m.length || 0) * 1609.34,
+                duration: m.time || 0,
+                maneuver: { 
+                    instruction: m.instruction,
+                    type: m.type,
+                    modifier: m.modifier
+                }
+            }))
+        }))
+    };
+}
+
+// HELPER: Extract major road names from route maneuvers/steps
+function getMajorRoadsSummary(route) {
+    const roadCounts = {};
+    if (route.legs) {
+        route.legs.forEach(leg => {
+            (leg.steps || []).forEach(step => {
+                const name = step.name || "";
+                const matches = name.match(/\b(I[- ]?\d+|US[- ]?\d+|GA[- ]?\d+|FL[- ]?\d+|SC[- ]?\d+|NC[- ]?\d+|State Route \d+)\b/gi);
+                if (matches) {
+                    matches.forEach(m => {
+                        const standard = m.toUpperCase().replace(/\s+/g, "-");
+                        roadCounts[standard] = (roadCounts[standard] || 0) + (step.distance || 1);
+                    });
+                }
+            });
+        });
     }
-    
-    // Savannah <-> Brunswick/Jacksonville corridor
-    const isSavJax = (Math.abs(start[0] - 32.0835) < 0.5 && Math.abs(end[0] - 30.3322) < 0.5) ||
-                     (Math.abs(start[0] - 30.3322) < 0.5 && Math.abs(end[0] - 32.0835) < 0.5);
-    if (isSavJax) {
-        return [31.2580, -81.4420]; // Darien/Brunswick GA on US-17
+    const sorted = Object.keys(roadCounts).sort((a, b) => roadCounts[b] - roadCounts[a]);
+    return sorted.slice(0, 2).join(" & ");
+}
+
+// HELPER: Rigorous Interstate & Freeway detection
+function checkIfRouteHasInterstate(route) {
+    if (route.isValhallaTruck && route.hasHighway !== undefined) {
+        return route.hasHighway;
     }
-    
-    // Fallback midpoint: shift midpoint perpendicularly to direct path to bypass freeways
-    const midLat = (start[0] + end[0]) / 2;
-    const midLng = (start[1] + end[1]) / 2;
-    return [midLat + 0.045, midLng - 0.045];
+    let hasInterstate = false;
+    if (route.legs) {
+        route.legs.forEach(leg => {
+            if (leg.steps) {
+                leg.steps.forEach(step => {
+                    const name = (step.name || "").toUpperCase();
+                    const ref = (step.ref || "").toUpperCase();
+                    const instruction = (step.maneuver?.instruction || "").toUpperCase();
+                    if (
+                        name.includes("INTERSTATE") || ref.includes("INTERSTATE") ||
+                        name.includes("FREEWAY") || ref.includes("FREEWAY") ||
+                        /\bI[- ]*\d+\b/.test(name) || /\bI[- ]*\d+\b/.test(ref) ||
+                        /\bI[- ]*\d+\b/.test(instruction)
+                    ) {
+                        hasInterstate = true;
+                    }
+                });
+            }
+        });
+    }
+    return hasInterstate;
 }
 
 // ROUTING CALCULATION LOGIC
@@ -195,6 +357,9 @@ function calculateSafeRoute() {
         alert("Please select starting and destination locations from the suggestions list.");
         return;
     }
+
+    // Check avoid interstates / prefer scenic toggle
+    const avoidInterstates = document.getElementById("chk-avoid-interstates")?.checked || false;
     
     // Expand drawer on mobile to show results
     const appPanel = document.getElementById("app-panel");
@@ -202,113 +367,240 @@ function calculateSafeRoute() {
         appPanel.classList.remove("collapsed");
     }
     
-    // Construct OSRM coordinate driving query with alternatives and steps enabled
-    // API Coordinate order: longitude,latitude
-    const url = `https://router.project-osrm.org/route/v1/driving/${startLatLng[1]},${startLatLng[0]};${endLatLng[1]},${endLatLng[0]}?geometries=geojson&overview=full&alternatives=true&steps=true`;
-    
     // Show spinner or loader on button
     const btn = document.getElementById("btn-calculate-route");
     const originalText = btn.innerHTML;
-    btn.innerHTML = `<i class="fa-solid fa-circle-notch fa-spin"></i> Analyzing restrictions...`;
+    btn.innerHTML = avoidInterstates 
+        ? `<i class="fa-solid fa-tree fa-spin"></i> Finding 100% scenic non-interstate route...`
+        : `<i class="fa-solid fa-circle-notch fa-spin"></i> Calculating RV safe route (Stadia Valhalla)...`;
     btn.disabled = true;
+
+    // Check Stadia Maps API Key for True Valhalla RV Routing
+    const stadiaKey = window.APP_CONFIG?.STADIA_API_KEY;
+    const activeProf = (state.profiles && state.profiles.find(p => p.id === state.activeProfileId)) || state.profiles?.[0];
+    const bufferedH = activeProf ? (activeProf.bufferedHeightFt * 0.3048 + activeProf.bufferedHeightIn * 0.0254) : 4.15;
+    const bufferedW = activeProf ? ((activeProf.bufferedWeight || activeProf.weight || 20000) * 0.000453592) : 11.5;
+    const bufferedWidth = activeProf ? (activeProf.bufferedWidthFt * 0.3048 + activeProf.bufferedWidthIn * 0.0254) : 2.6;
+    const lengthM = activeProf ? ((activeProf.length || activeProf.lengthFt || 40) * 0.3048) : 12.0;
+
+    const truckCosting = {
+        height: parseFloat(bufferedH.toFixed(2)),
+        weight: parseFloat(bufferedW.toFixed(2)),
+        width: parseFloat(bufferedWidth.toFixed(2)),
+        length: parseFloat(lengthM.toFixed(2)),
+        hazmat: false
+    };
+
+    if (stadiaKey) {
+        if (avoidInterstates) {
+            // MODE A: EXCLUSIVE SCENIC (AVOID INTERSTATES)
+            // Query Stadia Valhalla with use_highways: 0.0, use_tolls: 0.0 and request 2 alternates
+            fetch(`https://api.stadiamaps.com/route/v1?api_key=${stadiaKey}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    locations: [
+                        { lat: startLatLng[0], lon: startLatLng[1] },
+                        { lat: endLatLng[0], lon: endLatLng[1] }
+                    ],
+                    costing: "truck",
+                    costing_options: {
+                        truck: {
+                            ...truckCosting,
+                            use_highways: 0.0,
+                            use_tolls: 0.0
+                        }
+                    },
+                    alternates: 2,
+                    directions_options: { units: "miles" }
+                })
+            })
+            .then(r => r.json())
+            .then(vData => {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+
+                const candidateRoutes = [];
+                if (vData?.trip?.legs?.[0]?.shape) {
+                    const mainScenic = formatValhallaTrip(vData.trip, "Scenic Route");
+                    if (mainScenic && !checkIfRouteHasInterstate(mainScenic)) {
+                        candidateRoutes.push(mainScenic);
+                    }
+                }
+                if (vData?.alternates && Array.isArray(vData.alternates)) {
+                    vData.alternates.forEach(alt => {
+                        if (alt?.trip?.legs?.[0]?.shape) {
+                            const altScenic = formatValhallaTrip(alt.trip, "Scenic Alternative");
+                            if (altScenic && !checkIfRouteHasInterstate(altScenic)) {
+                                candidateRoutes.push(altScenic);
+                            }
+                        }
+                    });
+                }
+
+                if (candidateRoutes.length > 0) {
+                    // Sort candidate scenic routes so the fastest/shortest is first
+                    candidateRoutes.sort((a, b) => a.duration - b.duration);
+
+                    // Name each scenic route based on its actual primary highway corridor
+                    candidateRoutes.forEach((r, idx) => {
+                        const roads = getMajorRoadsSummary(r);
+                        if (idx === 0) {
+                            r.customName = `Scenic Secondary Highway (${roads || 'Secondary Roads'} - No Interstates)`;
+                        } else if (idx === 1) {
+                            r.customName = `Scenic Country Byway (${roads || 'State Routes'} - No Interstates)`;
+                        } else {
+                            r.customName = `Scenic Coastal/Rural Route (${roads || 'Scenic Highway'} - No Interstates)`;
+                        }
+                    });
+
+                    processAndRenderRoutesList(candidateRoutes, true);
+                    return;
+                }
+
+                // If Valhalla had no pure scenic routes, fallback to OSRM
+                fetchOsrmFallback(truckCosting, true, originalText);
+            })
+            .catch(err => {
+                console.warn("Valhalla scenic error, falling back to OSRM:", err);
+                fetchOsrmFallback(truckCosting, true, originalText);
+            });
+        } else {
+            // MODE B: NORMAL FAST ROUTING
+            // Query Valhalla for fast truck route AND query a scenic alternative in parallel
+            Promise.all([
+                fetch(`https://api.stadiamaps.com/route/v1?api_key=${stadiaKey}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        locations: [
+                            { lat: startLatLng[0], lon: startLatLng[1] },
+                            { lat: endLatLng[0], lon: endLatLng[1] }
+                        ],
+                        costing: "truck",
+                        costing_options: {
+                            truck: {
+                                ...truckCosting,
+                                use_highways: 1.0,
+                                use_tolls: 0.8
+                            }
+                        },
+                        alternates: 1,
+                        directions_options: { units: "miles" }
+                    })
+                }).then(r => r.json()).catch(() => null),
+                fetch(`https://api.stadiamaps.com/route/v1?api_key=${stadiaKey}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        locations: [
+                            { lat: startLatLng[0], lon: startLatLng[1] },
+                            { lat: endLatLng[0], lon: endLatLng[1] }
+                        ],
+                        costing: "truck",
+                        costing_options: {
+                            truck: {
+                                ...truckCosting,
+                                use_highways: 0.0,
+                                use_tolls: 0.0
+                            }
+                        },
+                        alternates: 1,
+                        directions_options: { units: "miles" }
+                    })
+                }).then(r => r.json()).catch(() => null)
+            ])
+            .then(([fastData, scenicData]) => {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+
+                const allRoutes = [];
+
+                // Fast Valhalla Primary
+                if (fastData?.trip?.legs?.[0]?.shape) {
+                    const fastRoute = formatValhallaTrip(fastData.trip, "Stadia Valhalla (Fast Route - Clearances Safe)");
+                    const roads = getMajorRoadsSummary(fastRoute);
+                    if (roads) {
+                        fastRoute.customName = `Stadia Valhalla Fast RV Route (${roads})`;
+                    }
+                    allRoutes.push(fastRoute);
+                }
+
+                // Fast Alternate
+                if (fastData?.alternates?.[0]?.trip?.legs?.[0]?.shape) {
+                    const fastAlt = formatValhallaTrip(fastData.alternates[0].trip, "Fast Alternative Route");
+                    allRoutes.push(fastAlt);
+                }
+
+                // Scenic Alternative (100% Non-Interstate)
+                let bestScenic = null;
+                if (scenicData?.trip?.legs?.[0]?.shape) {
+                    bestScenic = formatValhallaTrip(scenicData.trip, "Scenic Alternative");
+                }
+                if (scenicData?.alternates?.[0]?.trip?.legs?.[0]?.shape) {
+                    const altScenic = formatValhallaTrip(scenicData.alternates[0].trip, "Scenic Alternative");
+                    if (!bestScenic || (altScenic.duration < bestScenic.duration)) {
+                        bestScenic = altScenic;
+                    }
+                }
+                if (bestScenic && !checkIfRouteHasInterstate(bestScenic)) {
+                    const roads = getMajorRoadsSummary(bestScenic);
+                    bestScenic.customName = `Scenic Secondary Alternative (${roads || 'No Interstates'})`;
+                    allRoutes.push(bestScenic);
+                }
+
+                if (allRoutes.length > 0) {
+                    processAndRenderRoutesList(allRoutes, false);
+                    return;
+                }
+
+                fetchOsrmFallback(truckCosting, false, originalText);
+            })
+            .catch(err => {
+                console.warn("Valhalla routing error, falling back to OSRM:", err);
+                fetchOsrmFallback(truckCosting, false, originalText);
+            });
+        }
+    } else {
+        fetchOsrmFallback(truckCosting, avoidInterstates, originalText);
+    }
+}
+
+// OSRM FALLBACK ROUTING
+function fetchOsrmFallback(truckCosting, avoidInterstates, originalText) {
+    const btn = document.getElementById("btn-calculate-route");
+    const url = `https://router.project-osrm.org/route/v1/driving/${startLatLng[1]},${startLatLng[0]};${endLatLng[1]},${endLatLng[0]}?geometries=geojson&overview=full&alternatives=true&steps=true`;
     
     fetch(url)
-        .then(res => res.json())
-        .then(data => {
-            btn.innerHTML = originalText;
-            btn.disabled = false;
-            
-            if (data.code !== "Ok" || !data.routes || data.routes.length === 0) {
-                alert("Could not compute route geometry between coordinates.");
+        .then(r => r.json())
+        .then(osrmData => {
+            if (btn) {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+            }
+            if (!osrmData || osrmData.code !== "Ok" || !osrmData.routes || osrmData.routes.length === 0) {
+                alert("Could not compute route geometry. Check internet connection.");
                 return;
             }
-            
-            const avoidInterstates = document.getElementById("chk-avoid-interstates")?.checked || false;
-            
-            const primaryRoute = data.routes[0];
-            const coordinates = primaryRoute.geometry.coordinates.map(c => [c[1], c[0]]);
-            const primaryHazards = getHazardsForPath(coordinates);
-            
-            const detourWaypoints = [];
-            
-            // 1. If hazard exists, generate clearance bypass detour
-            if (primaryHazards.length > 0) {
-                const firstHazard = primaryHazards[0];
-                let detourLat = firstHazard.lat - 0.025;
-                let detourLng = firstHazard.lng - 0.035;
-                
-                // Savannah rail bridge bypass adjustment
-                if (Math.abs(firstHazard.lat - 32.0674) < 0.01) {
-                    detourLat = 32.0520;
-                    detourLng = -81.1450; // SW freeway bypass detour
-                }
-                detourWaypoints.push({ lat: detourLat, lng: detourLng, label: "Detour Bypass" });
-            }
-            
-            // 2. If avoid interstates toggle is active, generate scenic detour waypoint
-            if (avoidInterstates) {
-                const scenic = getScenicDetourWaypoint(startLatLng, endLatLng);
-                detourWaypoints.push({ lat: scenic[0], lng: scenic[1], label: "Scenic Bypass" });
-            }
-            
-            // Parallel fetches for all mid-way detours
-            const detourPromises = detourWaypoints.map(wp => {
-                const detourUrl = `https://router.project-osrm.org/route/v1/driving/${startLatLng[1]},${startLatLng[0]};${wp.lng},${wp.lat};${endLatLng[1]},${endLatLng[0]}?geometries=geojson&overview=full&steps=true`;
-                return fetch(detourUrl)
-                    .then(res => res.json())
-                    .then(wpData => {
-                        if (wpData.code === "Ok" && wpData.routes && wpData.routes.length > 0) {
-                            const r = wpData.routes[0];
-                            r.isDetour = true;
-                            r.customName = wp.label === "Scenic Bypass" ? "Scenic Path (Non-Interstate)" : "Safe Bypass (Auto Detour)";
-                            return r;
-                        }
-                        return null;
-                    })
-                    .catch(() => null);
-            });
-            
-            Promise.all(detourPromises)
-                .then(detourRoutes => {
-                    let allRoutes = [...data.routes];
-                    detourRoutes.forEach(dr => {
-                        if (dr) allRoutes.push(dr);
-                    });
-                    processAndRenderRoutesList(allRoutes, avoidInterstates);
-                });
+            const routes = osrmData.routes;
+            processAndRenderRoutesList(routes, avoidInterstates);
         })
         .catch(err => {
-            btn.innerHTML = originalText;
-            btn.disabled = false;
-            console.error("Routing error:", err);
-            alert("Error connecting to OSRM routing service. Check internet connection.");
+            if (btn) {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+            }
+            console.error("OSRM fallback error:", err);
+            alert("Error connecting to routing service. Please try again.");
         });
 }
 
 // ROUTE PROCESSOR & SCORER
-function processAndRenderRoutesList(osrmRoutes, avoidInterstates) {
-    const analyzedRoutes = osrmRoutes.map((route, index) => {
+function processAndRenderRoutesList(routesList, avoidInterstates) {
+    const analyzedRoutes = routesList.map((route, index) => {
         const coordinates = route.geometry.coordinates.map(c => [c[1], c[0]]);
         const hazards = getHazardsForPath(coordinates);
-        
-        // Scan steps for interstates
-        let containsInterstate = false;
-        if (route.legs) {
-            route.legs.forEach(leg => {
-                if (leg.steps) {
-                    leg.steps.forEach(step => {
-                        const name = (step.name || "").toUpperCase();
-                        const ref = (step.ref || "").toUpperCase();
-                        const isInterstate = name.startsWith("I-") || name.includes("INTERSTATE") || 
-                                             ref.startsWith("I-") || ref.includes("INTERSTATE") ||
-                                             /^I\s\d+/.test(name) || /^I\s\d+/.test(ref);
-                        if (isInterstate) {
-                            containsInterstate = true;
-                        }
-                    });
-                }
-            });
-        }
+        const containsInterstate = checkIfRouteHasInterstate(route);
         
         return {
             index: index,
@@ -320,28 +612,33 @@ function processAndRenderRoutesList(osrmRoutes, avoidInterstates) {
             hasInterstate: containsInterstate
         };
     });
-    
-    // Render selector DOM element
-    renderRouteAlternativesSelector(analyzedRoutes);
-    
-    // Scorer logic: Select active path
+
+    let displayRoutes = analyzedRoutes;
     let selected = null;
+
     if (avoidInterstates) {
-        // Priority 1: Safe and has no interstates
-        selected = analyzedRoutes.find(r => r.isSafe && !r.hasInterstate);
-        // Priority 2: Non-interstate even with hazards
-        if (!selected) selected = analyzedRoutes.find(r => !r.hasInterstate);
-        // Priority 3: Safe even with interstates
-        if (!selected) selected = analyzedRoutes.find(r => r.isSafe);
+        // STRICT FILTERING: When Avoid Interstates is checked, do NOT show routes with interstates!
+        const nonInterstateRoutes = analyzedRoutes.filter(r => !r.hasInterstate);
+        if (nonInterstateRoutes.length > 0) {
+            displayRoutes = nonInterstateRoutes;
+            // Pick safest non-interstate route (or shortest/fastest)
+            selected = nonInterstateRoutes.find(r => r.isSafe) || nonInterstateRoutes[0];
+        } else {
+            // Extreme fallback if every route touched an interstate
+            selected = analyzedRoutes.find(r => r.isSafe) || analyzedRoutes[0];
+        }
     } else {
-        // Priority 1: Safe routes
-        selected = analyzedRoutes.find(r => r.isSafe);
+        // Normal Mode: Prefer safest fast route
+        selected = analyzedRoutes.find(r => r.isSafe) || analyzedRoutes[0];
     }
-    
-    // Fallback
-    if (!selected) selected = analyzedRoutes[0];
-    
-    selectActiveRouteOption(selected, analyzedRoutes);
+
+    // Re-index display routes for clean UI IDs
+    displayRoutes.forEach((r, i) => {
+        r.index = i;
+    });
+
+    renderRouteAlternativesSelector(displayRoutes);
+    selectActiveRouteOption(selected || displayRoutes[0], displayRoutes);
 }
 
 // HAZARD EVALUATION HELPER
@@ -353,6 +650,10 @@ function getHazardsForPath(coordinates) {
     const activeHeightIn = activeProfile.bufferedHeightIn;
     const activeWeight = activeProfile.bufferedWeight;
     const activeTotalHeightIn = (activeHeightFt * 12) + activeHeightIn;
+    
+    const activeWidthFt = activeProfile.bufferedWidthFt || 8;
+    const activeWidthIn = activeProfile.bufferedWidthIn || 6;
+    const activeTotalWidthIn = (activeWidthFt * 12) + activeWidthIn;
     
     const triggeredHazards = [];
     
@@ -374,6 +675,11 @@ function getHazardsForPath(coordinates) {
                 }
             } else if (hazard.type === "weight") {
                 if (activeWeight >= hazard.limitLbs) {
+                    isTriggered = true;
+                }
+            } else if (hazard.type === "width") {
+                const hzTotalWidthIn = (hazard.limitFt * 12) + hazard.limitIn;
+                if (activeTotalWidthIn >= hzTotalWidthIn) {
                     isTriggered = true;
                 }
             }
@@ -419,8 +725,8 @@ function renderRouteAlternativesSelector(analyzedRoutes) {
                 <h5>${routeOpt.name}</h5>
                 <div class="alt-meta">
                     <span>${distanceMiles} mi • ${durationStr}</span> • 
-                    <span style="color:${routeOpt.hasInterstate ? 'var(--text-muted)' : 'var(--color-safe)'}; font-weight: 600;">
-                        ${routeOpt.hasInterstate ? 'Interstate' : 'Scenic'}
+                    <span style="color:${routeOpt.hasInterstate ? 'var(--color-info)' : 'var(--color-safe)'}; font-weight: 600;">
+                        <i class="fa-solid ${routeOpt.hasInterstate ? 'fa-road' : 'fa-tree'}"></i> ${routeOpt.hasInterstate ? 'Interstate Highway' : 'Scenic / Secondary'}
                     </span>
                 </div>
             </div>
@@ -442,6 +748,11 @@ function selectActiveRouteOption(routeOption, allRoutes) {
     state.activeRoutePolylineCoordinates = routeOption.coordinates;
     activeHazardsOnRoute = routeOption.hazards;
     
+    // Store in global state for references
+    state.activeRouteData = routeOption.routeData;
+    state.staticHazards = routeOption.hazards;
+    state.weatherAlerts = []; // Reset on new route selection
+    
     // Toggle active selectors classes
     allRoutes.forEach(r => {
         const card = document.getElementById(`alt-card-${r.index}`);
@@ -454,8 +765,30 @@ function selectActiveRouteOption(routeOption, allRoutes) {
     // Draw on Map Canvas
     renderRouteOnMap(routeOption.coordinates, routeOption.hazards);
     
-    // Display results in sidebar
+    // Update route type badge
+    const badgeEl = document.getElementById("route-type-badge");
+    if (badgeEl) {
+        if (routeOption.hasInterstate) {
+            badgeEl.className = "route-badge badge-interstate";
+            badgeEl.innerHTML = `<i class="fa-solid fa-road"></i> Interstate Highway Route`;
+        } else {
+            badgeEl.className = "route-badge badge-scenic";
+            badgeEl.innerHTML = `<i class="fa-solid fa-tree"></i> 100% Non-Interstate Scenic Route`;
+        }
+    }
+    
+    // Display results in sidebar (initially with static hazards)
     displayRouteResults(routeOption.routeData, routeOption.hazards);
+    
+    // Fetch weather asynchronously along the route
+    checkWeatherForRoute(routeOption.coordinates);
+    
+    // Fetch multi-checkpoint route weather, crosswind analysis & destination forecast
+    if (window.WeatherManager && typeof window.WeatherManager.fetchRouteWeather === 'function') {
+        const startName = document.getElementById("route-start")?.value || "Departure";
+        const endName = document.getElementById("route-end")?.value || "Destination";
+        window.WeatherManager.fetchRouteWeather(routeOption.coordinates, startName, endName);
+    }
 }
 
 // MAP CANVAS RENDERER
@@ -507,12 +840,25 @@ function renderRouteOnMap(coordinates, hazards) {
             })
         }).addTo(state.map);
         
+        let restrictionStr = "";
+        let alertTitle = "Clearance Alert";
+        if (hazard.type === 'height') {
+            restrictionStr = `${hazard.limitFt}' ${hazard.limitIn}" Max Height`;
+            alertTitle = "Height Restriction Alert";
+        } else if (hazard.type === 'weight') {
+            restrictionStr = `${hazard.limitLbs.toLocaleString()} lbs Weight Limit`;
+            alertTitle = "Weight Restriction Alert";
+        } else if (hazard.type === 'width') {
+            restrictionStr = `${hazard.limitFt}' ${hazard.limitIn}" Max Width`;
+            alertTitle = "Width Restriction Alert";
+        }
+        
         const popupContent = `
             <div>
-                <h4><i class="fa-solid fa-triangle-exclamation" style="color:var(--color-danger)"></i> Clearance Alert</h4>
+                <h4><i class="fa-solid fa-triangle-exclamation" style="color:var(--color-danger)"></i> ${alertTitle}</h4>
                 <p><b>${hazard.name}</b></p>
                 <p>Restriction: <span style="color:var(--color-danger);font-weight:700;">
-                    ${hazard.type === 'height' ? `${hazard.limitFt}' ${hazard.limitIn}" Max Height` : `${hazard.limitLbs.toLocaleString()} lbs Weight Limit`}
+                    ${restrictionStr}
                 </span></p>
                 <p style="font-size:11px;margin-top:6px;">${hazard.desc}</p>
             </div>
@@ -646,22 +992,22 @@ function displayRouteResults(routeData, hazards) {
     if (directionsList) {
         directionsList.innerHTML = "";
         
-        if (routeData.legs && routeData.legs[0] && routeData.legs[0].steps) {
-            const steps = routeData.legs[0].steps;
-            steps.forEach(step => {
-                const li = document.createElement("li");
-                
-                const iconClass = getDirectionIcon(step.maneuver);
-                const text = getDirectionText(step);
-                const distStr = formatStepDistance(step.distance);
-                
-                li.innerHTML = `
-                    <div class="dir-icon"><i class="fa-solid ${iconClass}"></i></div>
-                    <div class="dir-text">${text}</div>
-                    <div class="dir-dist">${distStr}</div>
-                `;
-                
-                directionsList.appendChild(li);
+        if (routeData.legs && routeData.legs.length > 0) {
+            routeData.legs.forEach(leg => {
+                const steps = leg.steps || [];
+                steps.forEach(step => {
+                    const li = document.createElement("li");
+                    const iconClass = getDirectionIcon(step.maneuver);
+                    const text = getDirectionText(step);
+                    const distStr = formatStepDistance(step.distance);
+                    
+                    li.innerHTML = `
+                        <div class="dir-icon"><i class="fa-solid ${iconClass}"></i></div>
+                        <div class="dir-text">${text}</div>
+                        <div class="dir-dist">${distStr}</div>
+                    `;
+                    directionsList.appendChild(li);
+                });
             });
         } else {
             directionsList.innerHTML = `<li><div class="dir-text">No step-by-step directions available for this route.</div></li>`;
@@ -679,15 +1025,38 @@ function displayRouteResults(routeData, hazards) {
     
     hazards.forEach(hazard => {
         const li = document.createElement("li");
+        
+        let iconClass = "fa-triangle-exclamation";
+        let colorClass = "hz-icon-warn";
+        let restrictionStr = "";
+        let colorVar = "--color-warning";
+        
+        if (hazard.type === 'height') {
+            iconClass = "fa-arrows-up-down";
+            colorClass = "hz-icon-danger";
+            restrictionStr = `${hazard.limitFt}' ${hazard.limitIn}"`;
+            colorVar = "--color-danger";
+        } else if (hazard.type === 'weight') {
+            iconClass = "fa-weight-hanging";
+            colorClass = "hz-icon-warn";
+            restrictionStr = `${hazard.limitLbs.toLocaleString()} lbs`;
+            colorVar = "--color-warning";
+        } else if (hazard.type === 'width') {
+            iconClass = "fa-arrows-left-right";
+            colorClass = "hz-icon-danger";
+            restrictionStr = `${hazard.limitFt}' ${hazard.limitIn}"`;
+            colorVar = "--color-danger";
+        }
+        
         li.innerHTML = `
-            <div class="hz-icon ${hazard.type === 'height' ? 'hz-icon-danger' : 'hz-icon-warn'}">
-                <i class="fa-solid ${hazard.type === 'height' ? 'fa-arrows-up-down' : 'fa-weight-hanging'}"></i>
+            <div class="hz-icon ${colorClass}">
+                <i class="fa-solid ${iconClass}"></i>
             </div>
             <div class="hz-info">
                 <div class="hz-title">${hazard.name}</div>
                 <div class="hz-desc">
-                    Restriction Limit: <strong style="color:var(${hazard.type === 'height' ? '--color-danger' : '--color-warning'})">
-                        ${hazard.type === 'height' ? `${hazard.limitFt}' ${hazard.limitIn}"` : `${hazard.limitLbs.toLocaleString()} lbs`}
+                    Restriction Limit: <strong style="color:var(${colorVar})">
+                        ${restrictionStr}
                     </strong><br>
                     ${hazard.desc}
                 </div>
@@ -717,13 +1086,23 @@ function showGlobalSafetyAlert(hazards) {
     
     if (!alertBanner || !descText) return;
     
-    const activeProfile = state.profiles.find(p => p.id === state.activeProfileId);
-    
     if (hazards.length === 1) {
         const hz = hazards[0];
-        descText.textContent = `Caution: ${hz.name} restricts paths under ${hz.type === 'height' ? `${hz.limitFt}' ${hz.limitIn}"` : `${hz.limitLbs.toLocaleString()} lbs`}.`;
+        if (hz.type === "wind" || hz.type === "weather") {
+            descText.textContent = `Caution: High wind forecast along your route (${hz.windSpeed} mph).`;
+        } else {
+            let limitStr = "";
+            if (hz.type === 'height') {
+                limitStr = `${hz.limitFt}' ${hz.limitIn}"`;
+            } else if (hz.type === 'width') {
+                limitStr = `${hz.limitFt}' ${hz.limitIn}"`;
+            } else {
+                limitStr = `${hz.limitLbs.toLocaleString()} lbs`;
+            }
+            descText.textContent = `Caution: ${hz.name} restricts paths under ${limitStr}.`;
+        }
     } else {
-        descText.textContent = `Route contains ${hazards.length} vehicle restriction warnings for your active configuration.`;
+        descText.textContent = `Route contains ${hazards.length} vehicle restriction or weather warnings for your active configuration.`;
     }
     
     alertBanner.classList.remove("hidden");
@@ -791,3 +1170,334 @@ function varColorHex(varName) {
     const val = getComputedStyle(dummy).getPropertyValue(varName).trim();
     return val;
 }
+
+// WEATHER & SUSTAINED WIND API CHECKER (Open-Meteo Integration)
+function checkWeatherForRoute(coordinates) {
+    if (!coordinates || coordinates.length === 0) return;
+    
+    // Sample coordinates along the route (around 8-10 points)
+    const numPoints = coordinates.length;
+    const sampleSize = Math.min(10, numPoints);
+    const sampledCoords = [];
+    const step = Math.max(1, Math.floor(numPoints / sampleSize));
+    
+    for (let i = 0; i < numPoints; i += step) {
+        sampledCoords.push(coordinates[i]);
+        if (sampledCoords.length >= sampleSize) break;
+    }
+    // Always include the destination point if not already added
+    if (sampledCoords.indexOf(coordinates[numPoints - 1]) === -1) {
+        sampledCoords.push(coordinates[numPoints - 1]);
+    }
+    
+    const lats = sampledCoords.map(c => c[0].toFixed(4)).join(",");
+    const lns = sampledCoords.map(c => c[1].toFixed(4)).join(",");
+    
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lats}&longitude=${lns}&current=wind_speed_10m,wind_gusts_10m,weather_code&wind_speed_unit=mph&timezone=auto`;
+    
+    fetch(url)
+        .then(res => res.json())
+        .then(data => {
+            let results = [];
+            if (Array.isArray(data)) {
+                results = data;
+            } else if (data && data.latitude !== undefined) {
+                results = [data];
+            } else if (data && data.current) {
+                results = [data];
+            }
+            
+            if (results.length > 0) {
+                processWeatherResults(results, sampledCoords);
+            }
+        })
+        .catch(err => {
+            console.error("Open-Meteo weather fetch error:", err);
+        });
+}
+
+function processWeatherResults(results, sampledCoords) {
+    const activeProfile = state.profiles.find(p => p.id === state.activeProfileId);
+    if (!activeProfile) return;
+    
+    const threshold = activeProfile.windThresholdMph || 25;
+    state.weatherAlerts = [];
+    
+    results.forEach((res, idx) => {
+        if (!res.current) return;
+        
+        const windSpeed = res.current.wind_speed_10m;
+        const windGust = res.current.wind_gusts_10m;
+        const code = res.current.weather_code;
+        
+        const isSevereWeather = [56, 57, 65, 66, 67, 75, 77, 82, 86, 95, 96, 99].includes(code);
+        const isHighWind = windSpeed > threshold;
+        
+        if (isHighWind || isSevereWeather) {
+            let type = "wind";
+            let name = "High Wind Advisory";
+            if (isSevereWeather) {
+                type = "weather";
+                name = getWeatherConditionName(code);
+            }
+            
+            const weatherAlert = {
+                id: `wx-${idx}-${Date.now()}`,
+                name: name,
+                lat: res.latitude,
+                lng: res.longitude,
+                type: type, // "wind" or "weather"
+                windSpeed: windSpeed,
+                windGust: windGust,
+                weatherCode: code,
+                desc: getWeatherDescription(code, windSpeed, windGust, threshold)
+            };
+            
+            state.weatherAlerts.push(weatherAlert);
+        }
+    });
+    
+    // Draw weather alerts on map and rebuild sidebar UI
+    if (state.weatherAlerts.length > 0) {
+        renderWeatherAlertsOnMap(state.weatherAlerts);
+        rebuildCombinedHazardsList();
+    }
+}
+
+function getWeatherConditionName(code) {
+    if (code === 56 || code === 57) return "Freezing Drizzle Advisory";
+    if (code === 65) return "Heavy Rain Warning";
+    if (code === 66 || code === 67) return "Freezing Rain Warning";
+    if (code === 75) return "Heavy Snow Warning";
+    if (code === 82) return "Violent Rain Showers Warning";
+    if (code === 86) return "Heavy Snow Showers Warning";
+    if (code === 95 || code === 96 || code === 99) return "Severe Thunderstorm Warning";
+    return "Severe Weather Warning";
+}
+
+function getWeatherDescription(code, windSpeed, windGust, threshold) {
+    let condition = "Unknown Weather";
+    if (code === 0) condition = "Clear sky";
+    else if ([1, 2, 3].includes(code)) condition = "Partly cloudy";
+    else if ([45, 48].includes(code)) condition = "Foggy";
+    else if ([51, 53, 55].includes(code)) condition = "Drizzle";
+    else if ([56, 57].includes(code)) condition = "Freezing Drizzle";
+    else if ([61, 63].includes(code)) condition = "Light Rain";
+    else if (code === 65) condition = "Heavy Rain";
+    else if ([66, 67].includes(code)) condition = "Freezing Rain";
+    else if ([71, 73].includes(code)) condition = "Light Snow";
+    else if (code === 75) condition = "Heavy Snow";
+    else if (code === 77) condition = "Snow grains";
+    else if ([80, 81, 82].includes(code)) condition = "Rain Showers";
+    else if ([85, 86].includes(code)) condition = "Snow Showers";
+    else if ([95, 96, 99].includes(code)) condition = "Thunderstorm";
+    
+    let desc = `Condition: ${condition}. Wind: ${windSpeed} mph (gusts up to ${windGust} mph).`;
+    if (windSpeed > threshold) {
+        desc += ` WARNING: Sustained winds exceed your profile threshold of ${threshold} mph. Large RV rigs have high rollover risk.`;
+    }
+    return desc;
+}
+
+function getWeatherIcon(code, windSpeed, threshold) {
+    if (windSpeed > threshold) {
+        return "fa-wind";
+    }
+    if ([95, 96, 99].includes(code)) return "fa-cloud-bolt";
+    if ([65, 82].includes(code)) return "fa-cloud-showers-heavy";
+    if ([75, 86].includes(code)) return "fa-snowflake";
+    if ([56, 57, 66, 67].includes(code)) return "fa-icicles";
+    return "fa-cloud";
+}
+
+function renderWeatherAlertsOnMap(alerts) {
+    alerts.forEach(alert => {
+        const isSevere = alert.type === "weather";
+        const userProfile = state.profiles && state.profiles.find(p => p.id === state.activeProfileId);
+        const threshold = userProfile?.windThresholdMph || 25;
+        const iconClass = getWeatherIcon(alert.weatherCode, alert.windSpeed, threshold);
+        
+        const alertMarker = L.marker([alert.lat, alert.lng], {
+            icon: L.divIcon({
+                className: `custom-map-pin ${pinClass}`,
+                html: `<i class="fa-solid ${iconClass}"></i>`,
+                iconSize: [30, 30]
+            })
+        }).addTo(state.map);
+        
+        const popupContent = `
+            <div>
+                <h4><i class="fa-solid ${iconClass}" style="color:${isSevere ? 'var(--color-danger)' : 'var(--color-warning)'}"></i> ${alert.name}</h4>
+                <p><b>Location Alert</b></p>
+                <p>Wind Forecast: <span style="color:${isSevere ? 'var(--color-danger)' : 'var(--color-warning)'};font-weight:700;">
+                    ${alert.windSpeed} mph (${alert.windGust} mph gusts)
+                </span></p>
+                <p style="font-size:11px;margin-top:6px;">${alert.desc}</p>
+            </div>
+        `;
+        
+        alertMarker.bindPopup(popupContent);
+        state.activeRouteMarkers.push(alertMarker);
+        
+        // Render local warning ring (8km radius for weather)
+        const warningRing = L.circle([alert.lat, alert.lng], {
+            color: varColorHex(isSevere ? '--color-danger' : '--color-warning'),
+            fillColor: varColorHex(isSevere ? '--color-danger' : '--color-warning'),
+            fillOpacity: 0.1,
+            radius: 8000
+        }).addTo(state.map);
+        state.activeRouteMarkers.push(warningRing);
+    });
+}
+
+function rebuildCombinedHazardsList() {
+    const staticHazards = state.staticHazards || [];
+    const weatherAlerts = state.weatherAlerts || [];
+    const allHazards = [...staticHazards, ...weatherAlerts];
+    
+    // Update counts
+    const hazardStat = document.getElementById("route-hazards");
+    if (hazardStat) hazardStat.textContent = allHazards.length;
+    
+    const summaryBox = document.querySelector(".route-summary");
+    if (summaryBox) {
+        if (allHazards.length > 0) {
+            summaryBox.classList.add("has-hazards");
+            showGlobalSafetyAlert(allHazards);
+        } else {
+            summaryBox.classList.remove("has-hazards");
+            hideGlobalSafetyAlert();
+        }
+    }
+    
+    // Re-populate list
+    const hazardList = document.getElementById("hazard-list");
+    if (!hazardList) return;
+    
+    hazardList.innerHTML = "";
+    
+    if (allHazards.length === 0) {
+        hazardList.innerHTML = `<li class="no-hazards"><i class="fa-solid fa-circle-check"></i> Clean route! No restrictions or weather warnings.</li>`;
+        return;
+    }
+    
+    allHazards.forEach(hazard => {
+        const li = document.createElement("li");
+        
+        let iconClass = "fa-triangle-exclamation";
+        let colorClass = "hz-icon-warn";
+        let restrictionStr = "";
+        let colorVar = "--color-warning";
+        
+        const isWeather = hazard.type === "wind" || hazard.type === "weather";
+        
+        if (isWeather) {
+            const activeProfile = state.profiles.find(p => p.id === state.activeProfileId);
+            const threshold = activeProfile ? activeProfile.windThresholdMph : 25;
+            iconClass = getWeatherIcon(hazard.weatherCode, hazard.windSpeed, threshold);
+            colorClass = hazard.type === "weather" ? "hz-icon-weather-danger" : "hz-icon-weather-warn";
+            restrictionStr = `Wind: ${hazard.windSpeed} mph`;
+            colorVar = hazard.type === "weather" ? "--color-danger" : "--color-warning";
+        } else {
+            if (hazard.type === 'height') {
+                iconClass = "fa-arrows-up-down";
+                colorClass = "hz-icon-danger";
+                restrictionStr = `${hazard.limitFt}' ${hazard.limitIn}"`;
+                colorVar = "--color-danger";
+            } else if (hazard.type === 'weight') {
+                iconClass = "fa-weight-hanging";
+                colorClass = "hz-icon-warn";
+                restrictionStr = `${hazard.limitLbs.toLocaleString()} lbs`;
+                colorVar = "--color-warning";
+            } else if (hazard.type === 'width') {
+                iconClass = "fa-arrows-left-right";
+                colorClass = "hz-icon-danger";
+                restrictionStr = `${hazard.limitFt}' ${hazard.limitIn}"`;
+                colorVar = "--color-danger";
+            }
+        }
+        
+        li.innerHTML = `
+            <div class="hz-icon ${colorClass}">
+                <i class="fa-solid ${iconClass}"></i>
+            </div>
+            <div class="hz-info">
+                <div class="hz-title">${hazard.name}</div>
+                <div class="hz-desc">
+                    ${isWeather ? 'Current Conditions' : 'Restriction Limit'}: <strong style="color:var(${colorVar})">
+                        ${restrictionStr}
+                    </strong><br>
+                    ${hazard.desc}
+                    ${isWeather && hazard.type === "wind" ? `<br><button class="btn-avoid-wind-inline" onclick="event.stopPropagation(); calculateWindBypass()"><i class="fa-solid fa-arrows-split-up-and-left"></i> Reroute to Avoid Wind</button>` : ''}
+                </div>
+            </div>
+        `;
+        
+        li.style.cursor = "pointer";
+        li.addEventListener("click", () => {
+            state.map.setView([hazard.lat, hazard.lng], isWeather ? 11 : 15);
+            // Highlight popup
+            state.activeRouteMarkers.forEach(m => {
+                if (m instanceof L.Marker && Math.abs(m.getLatLng().lat - hazard.lat) < 0.0001 && Math.abs(m.getLatLng().lng - hazard.lng) < 0.0001) {
+                    m.openPopup();
+                }
+            });
+        });
+        
+        hazardList.appendChild(li);
+    });
+}
+
+// WIND BYPASS REROUTING FUNCTION (User Triggered)
+window.calculateWindBypass = function() {
+    const windHazard = state.weatherAlerts.find(a => a.type === "wind" || a.type === "weather");
+    if (!windHazard) return;
+    
+    // Offset from the wind hazard to force OSRM to calculate a bypass route
+    const detourLat = windHazard.lat - 0.06;
+    const detourLng = windHazard.lng - 0.12; 
+    
+    const url = `https://router.project-osrm.org/route/v1/driving/${startLatLng[1]},${startLatLng[0]};${detourLng},${detourLat};${endLatLng[1]},${endLatLng[0]}?geometries=geojson&overview=full&steps=true`;
+    
+    const btn = document.getElementById("btn-calculate-route");
+    const originalText = btn.innerHTML;
+    btn.innerHTML = `<i class="fa-solid fa-circle-notch fa-spin"></i> Calculating wind bypass...`;
+    btn.disabled = true;
+    
+    fetch(url)
+        .then(res => res.json())
+        .then(data => {
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+            
+            if (data.code !== "Ok" || !data.routes || data.routes.length === 0) {
+                alert("Could not compute wind bypass route. Try selecting another alternative.");
+                return;
+            }
+            
+            const bypassRoute = data.routes[0];
+            bypassRoute.customName = "Wind Avoidance Route";
+            
+            const coordinates = bypassRoute.geometry.coordinates.map(c => [c[1], c[0]]);
+            const hazards = getHazardsForPath(coordinates);
+            
+            const routeOption = {
+                index: 99,
+                name: "Wind Avoidance Route (Manual Bypass)",
+                routeData: bypassRoute,
+                coordinates: coordinates,
+                hazards: hazards,
+                isSafe: hazards.length === 0,
+                hasInterstate: false
+            };
+            
+            selectActiveRouteOption(routeOption, [routeOption]);
+            showMapLayerNotification("Bypass Route Loaded (Avoiding High Winds)");
+        })
+        .catch(err => {
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+            console.error("Wind bypass route error:", err);
+            alert("Error connecting to routing service. Please try again.");
+        });
+};

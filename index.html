@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>RV Friendly GPS & Safe Router</title>
     
     <!-- Google Fonts: Plus Jakarta Sans & Outfit -->
@@ -16,8 +16,37 @@
     <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
     
+    <!-- Cache Control & Anti-Stale Headers -->
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    
     <!-- Custom Style Sheet -->
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=8">
+    
+    <!-- PWA & Mobile Web App Manifest -->
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" href="icon-192.png">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="RVSafeNav">
+    <meta name="theme-color" content="#0b0f19">
+
+    <!-- Auto-purge stale service workers & caches on localhost -->
+    <script>
+        if ('serviceWorker' in navigator && (location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
+            navigator.serviceWorker.getRegistrations().then(regs => {
+                for (let r of regs) r.unregister();
+            });
+        }
+        if ('caches' in window) {
+            caches.keys().then(keys => {
+                keys.forEach(k => {
+                    if (k.startsWith('rv-safenav-')) caches.delete(k);
+                });
+            });
+        }
+    </script>
 </head>
 <body class="dark-theme">
     <!-- Fullscreen Map Canvas -->
@@ -32,11 +61,24 @@
         </div>
     </div>
 
+    <!-- Floating Live Weather HUD Pill on Map (View Weather Without Zooming) -->
+    <div id="map-weather-hud" class="map-weather-hud" title="Click to view live weather without zooming">
+        <div class="weather-hud-icon"><i class="fa-solid fa-cloud-sun" style="color:#f59e0b"></i></div>
+        <div class="weather-hud-content">
+            <span class="weather-hud-main" id="hud-weather-main">Checking weather...</span>
+            <span class="weather-hud-sub" id="hud-weather-sub">Tap for route forecast</span>
+        </div>
+        <div class="weather-hud-arrow"><i class="fa-solid fa-chevron-right"></i></div>
+    </div>
+
     <!-- Map Floating Controls -->
     <div class="map-controls">
         <button id="btn-locate" class="ctrl-btn" title="Locate Me"><i class="fa-solid fa-crosshairs"></i></button>
         <button id="btn-add-pin-mode" class="ctrl-btn" title="Pin RV-Friendly Parking"><i class="fa-solid fa-map-pin"></i></button>
+        <button id="btn-weather-radar" class="ctrl-btn" title="Toggle Live Doppler Weather Radar"><i class="fa-solid fa-cloud-showers-heavy"></i></button>
+        <button id="btn-wind-overlay" class="ctrl-btn" title="Toggle Live Wind Speed & Gusts"><i class="fa-solid fa-wind"></i></button>
         <button id="btn-toggle-layers" class="ctrl-btn" title="Toggle Map Layers"><i class="fa-solid fa-layer-group"></i></button>
+        <button id="btn-map-download-app" class="ctrl-btn" title="Download & Install App"><i class="fa-solid fa-cloud-arrow-down"></i></button>
     </div>
 
     <!-- Instructions Toast for Pin Dropping -->
@@ -57,7 +99,7 @@
         </div>
 
         <div class="panel-content">
-            <!-- App Header -->
+            <!-- App Header: Line 1 (Title on left, Sign In on right) -->
             <header class="app-header">
                 <div class="logo">
                     <span class="logo-icon"><i class="fa-solid fa-truck-front"></i></span>
@@ -66,10 +108,32 @@
                         <p>OSM Restriction Engine</p>
                     </div>
                 </div>
-                <div class="active-profile-badge" id="active-profile-badge">
-                    <i class="fa-solid fa-shield-halved"></i> <span id="badge-name">Standard RV</span>
-                </div>
+                <div id="header-account-slot" class="header-account-slot"></div>
             </header>
+
+            <!-- Active Rig Profile Bar: Line 2 (Dedicated row below Title & Sign In) -->
+            <div class="rig-profile-bar" id="rig-profile-bar">
+                <div class="rig-profile-header-row">
+                    <div class="rig-profile-badge-title">
+                        <span class="rig-profile-icon"><i class="fa-solid fa-shield-halved"></i></span>
+                        <span class="rig-profile-label">ACTIVE RIG PROFILE</span>
+                    </div>
+                    <button type="button" class="btn-new-rig" id="btn-quick-new-rig" title="Create New Rig Profile">
+                        <i class="fa-solid fa-plus"></i> <span>New Rig</span>
+                    </button>
+                </div>
+                <div class="rig-profile-select-row">
+                    <div class="rig-select-wrapper">
+                        <select id="header-rig-select" class="header-rig-select" title="Switch Active Rig Profile">
+                            <!-- Populated dynamically by app.js -->
+                        </select>
+                        <i class="fa-solid fa-chevron-down rig-select-arrow"></i>
+                    </div>
+                </div>
+                <div class="rig-profile-specs" id="header-rig-specs">
+                    Loading rig specs...
+                </div>
+            </div>
 
             <!-- Navigation Tabs -->
             <nav class="panel-tabs">
@@ -106,6 +170,16 @@
                                 <span><i class="fa-solid fa-road-barrier"></i> Avoid Interstates (Prefer Scenic/Secondary)</span>
                             </label>
                         </div>
+                        <div class="weather-toggles-row">
+                            <label class="weather-toggle-pill">
+                                <input type="checkbox" id="chk-weather-radar">
+                                <span><i class="fa-solid fa-cloud-showers-heavy" style="color:var(--color-info)"></i> Weather Radar</span>
+                            </label>
+                            <label class="weather-toggle-pill">
+                                <input type="checkbox" id="chk-wind-overlay">
+                                <span><i class="fa-solid fa-wind" style="color:var(--color-warning)"></i> Wind Speed (mph)</span>
+                            </label>
+                        </div>
                         <button id="btn-calculate-route" class="btn-primary">
                             <i class="fa-solid fa-compass-drafting"></i> Calculate Safe Route
                         </button>
@@ -114,17 +188,44 @@
                     <!-- Route Details & Hazards Output -->
                     <div id="route-results" class="route-results hidden">
                         <div class="route-summary">
-                            <div class="stat-col">
-                                <span class="stat-lbl">Distance</span>
-                                <span class="stat-val" id="route-distance">0.0 mi</span>
+                            <div class="route-summary-header">
+                                <div id="route-type-badge" class="route-badge badge-scenic">
+                                    <i class="fa-solid fa-tree"></i> 100% Non-Interstate Scenic Route
+                                </div>
                             </div>
-                            <div class="stat-col border-left">
-                                <span class="stat-lbl">Duration</span>
-                                <span class="stat-val" id="route-duration">0h 0m</span>
+                            <div class="route-summary-stats">
+                                <div class="stat-col">
+                                    <span class="stat-lbl">Distance</span>
+                                    <span class="stat-val" id="route-distance">0.0 mi</span>
+                                </div>
+                                <div class="stat-col border-left">
+                                    <span class="stat-lbl">Duration</span>
+                                    <span class="stat-val" id="route-duration">0h 0m</span>
+                                </div>
+                                <div class="stat-col border-left">
+                                    <span class="stat-lbl">Hazards</span>
+                                    <span class="stat-val hazard-count" id="route-hazards">0</span>
+                                </div>
                             </div>
-                            <div class="stat-col border-left">
-                                <span class="stat-lbl">Hazards</span>
-                                <span class="stat-val hazard-count" id="route-hazards">0</span>
+                        </div>
+
+                        <!-- Route Weather Strip (View Weather Without Zooming) -->
+                        <div id="route-weather-card" class="route-weather-card">
+                            <div class="route-weather-header">
+                                <div class="weather-hdr-title">
+                                    <i class="fa-solid fa-cloud-sun text-info"></i>
+                                    <span>Weather Along Route</span>
+                                </div>
+                                <button type="button" class="btn-weather-forecast" id="btn-open-weather-modal" title="View 6-Hour Forecast & Crosswinds">
+                                    <i class="fa-solid fa-chart-line"></i> Full Forecast
+                                </button>
+                            </div>
+                            <div class="route-weather-checkpoints" id="route-weather-checkpoints">
+                                <!-- Populated dynamically by weather.js -->
+                            </div>
+                            <div class="route-weather-advisory" id="route-weather-advisory">
+                                <i class="fa-solid fa-shield-halved text-safe"></i>
+                                <span id="route-weather-advisory-text">Analyzing wind speeds and precipitation along route...</span>
                             </div>
                         </div>
 
@@ -214,6 +315,22 @@
                                     <input type="number" id="prof-length" min="1" step="1" value="40" required>
                                 </div>
                             </div>
+                            <div class="form-row">
+                                <div class="form-group col-6">
+                                    <label for="prof-width-ft">Width (Feet)</label>
+                                    <input type="number" id="prof-width-ft" min="1" max="15" step="1" value="8" required>
+                                </div>
+                                <div class="form-group col-6">
+                                    <label for="prof-width-in">Width (Inches)</label>
+                                    <input type="number" id="prof-width-in" min="0" max="11" step="1" value="6" required>
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group col-12">
+                                    <label for="prof-wind-threshold">Wind Speed Alert Threshold (mph)</label>
+                                    <input type="number" id="prof-wind-threshold" min="5" max="80" step="1" value="25" required>
+                                </div>
+                            </div>
 
                             <!-- Buffer Demonstration Label -->
                             <div class="buffer-info-box">
@@ -221,10 +338,12 @@
                                 <ul>
                                     <li>Height buffer: <strong class="buffer-text">+4 inches</strong> (contingency for repaving/tires)</li>
                                     <li>Weight buffer: <strong class="buffer-text">+5%</strong> (for tanks, supplies, equipment)</li>
+                                    <li>Width buffer: <strong class="buffer-text">+2 inches</strong> (for mirrors/lane safety margin)</li>
                                 </ul>
                                 <div class="buffered-preview">
                                     Buffered Height: <span id="preview-buffered-height">13' 10"</span><br>
-                                    Buffered Weight: <span id="preview-buffered-weight">25,200 lbs</span>
+                                    Buffered Weight: <span id="preview-buffered-weight">25,200 lbs</span><br>
+                                    Buffered Width: <span id="preview-buffered-width">8' 8"</span>
                                 </div>
                             </div>
 
@@ -329,12 +448,244 @@
         </div>
     </div>
 
+    <!-- Route Weather & Forecast Modal (View Weather Without Zooming) -->
+    <div id="route-weather-modal" class="modal-backdrop hidden">
+        <div class="modal-card weather-modal-card">
+            <div class="modal-header">
+                <div class="modal-title-group" style="display:flex;align-items:center;gap:10px;">
+                    <i class="fa-solid fa-cloud-sun" style="color:#f59e0b;font-size:20px;"></i>
+                    <h3 style="margin:0;font-size:17px;font-family:var(--font-heading);font-weight:700;">Live Route Weather & RV Wind Forecast</h3>
+                </div>
+                <button type="button" class="modal-close-btn" id="btn-close-weather-modal">&times;</button>
+            </div>
+            <div class="modal-body" id="weather-modal-body">
+                <!-- Dynamically populated by WeatherManager -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Quick Create Rig Profile Modal -->
+    <div id="modal-quick-new-rig" class="modal-backdrop hidden">
+        <div class="modal-card" style="max-width: 520px; width: 94%;">
+            <div class="modal-header">
+                <div class="modal-title-group" style="display:flex;align-items:center;gap:10px;">
+                    <i class="fa-solid fa-truck-front" style="color:var(--color-primary);font-size:20px;"></i>
+                    <h3 style="margin:0;font-size:17px;font-family:var(--font-heading);font-weight:700;">Add New Rig Profile</h3>
+                </div>
+                <button type="button" class="modal-close-btn" id="btn-close-quick-rig-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="quick-rig-form">
+                    <div class="form-group" style="margin-bottom:14px;">
+                        <label for="quick-prof-name" style="display:block;font-size:12px;font-weight:700;margin-bottom:6px;color:var(--text-secondary);">RIG / VEHICLE NAME</label>
+                        <input type="text" id="quick-prof-name" placeholder="e.g. 2024 Jayco Eagle 355MBQS" required style="width:100%;box-sizing:border-box;">
+                    </div>
+
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">
+                        <div class="form-group">
+                            <label for="quick-prof-height-ft" style="display:block;font-size:12px;font-weight:700;margin-bottom:6px;color:var(--text-secondary);">HEIGHT (FEET)</label>
+                            <input type="number" id="quick-prof-height-ft" placeholder="13" min="6" max="18" required style="width:100%;box-sizing:border-box;">
+                        </div>
+                        <div class="form-group">
+                            <label for="quick-prof-height-in" style="display:block;font-size:12px;font-weight:700;margin-bottom:6px;color:var(--text-secondary);">HEIGHT (INCHES)</label>
+                            <input type="number" id="quick-prof-height-in" placeholder="6" min="0" max="11" value="0" required style="width:100%;box-sizing:border-box;">
+                        </div>
+                    </div>
+
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">
+                        <div class="form-group">
+                            <label for="quick-prof-weight" style="display:block;font-size:12px;font-weight:700;margin-bottom:6px;color:var(--text-secondary);">WEIGHT (LBS)</label>
+                            <input type="number" id="quick-prof-weight" placeholder="16500" min="2000" max="80000" required style="width:100%;box-sizing:border-box;">
+                        </div>
+                        <div class="form-group">
+                            <label for="quick-prof-length" style="display:block;font-size:12px;font-weight:700;margin-bottom:6px;color:var(--text-secondary);">TOTAL LENGTH (FT)</label>
+                            <input type="number" id="quick-prof-length" placeholder="40" min="10" max="75" value="35" required style="width:100%;box-sizing:border-box;">
+                        </div>
+                    </div>
+
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
+                        <div class="form-group">
+                            <label for="quick-prof-width-ft" style="display:block;font-size:12px;font-weight:700;margin-bottom:6px;color:var(--text-secondary);">WIDTH (FT &amp; IN)</label>
+                            <div style="display:flex;gap:6px;">
+                                <input type="number" id="quick-prof-width-ft" placeholder="8" min="6" max="12" value="8" required style="width:50%;box-sizing:border-box;">
+                                <input type="number" id="quick-prof-width-in" placeholder="6" min="0" max="11" value="6" required style="width:50%;box-sizing:border-box;">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="quick-prof-wind-threshold" style="display:block;font-size:12px;font-weight:700;margin-bottom:6px;color:var(--text-secondary);">WIND LIMIT (MPH)</label>
+                            <input type="number" id="quick-prof-wind-threshold" placeholder="25" min="15" max="50" value="25" required style="width:100%;box-sizing:border-box;">
+                        </div>
+                    </div>
+
+                    <div class="buffer-alert-preview" style="background:rgba(59,130,246,0.1);border:1px solid rgba(59,130,246,0.25);border-radius:8px;padding:10px 12px;margin-bottom:18px;font-size:11px;color:var(--text-secondary);">
+                        <i class="fa-solid fa-shield-halved text-info"></i> <strong>Safety Buffers:</strong> +4" will be automatically added to height and +5% to weight for low-clearance bridge detection.
+                    </div>
+
+                    <div style="display:flex;justify-content:flex-end;gap:10px;">
+                        <button type="button" class="btn-secondary btn-sm" id="btn-cancel-quick-rig">Cancel</button>
+                        <button type="submit" class="btn-primary btn-sm">
+                            <i class="fa-solid fa-check"></i> Save &amp; Activate Rig
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Download & Install App Modal -->
+    <div id="download-app-modal" class="modal-backdrop hidden">
+        <div class="modal-card download-modal-card">
+            <div class="modal-header">
+                <div class="modal-title-group" style="display:flex;align-items:center;gap:10px;">
+                    <i class="fa-solid fa-cloud-arrow-down" style="color:var(--color-primary);font-size:22px;"></i>
+                    <h3 style="margin:0;font-size:18px;font-family:var(--font-heading);font-weight:700;">Download & Install RV SafeNavigate</h3>
+                </div>
+                <button type="button" class="modal-close-btn" id="btn-close-download-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p style="color:var(--text-secondary);font-size:13px;margin-top:0;margin-bottom:16px;">
+                    Take RV SafeNavigate on your phone, tablet, or vehicle dash with offline maps:
+                </p>
+
+                <div class="download-options-grid">
+                    <!-- Option 1: PWA Install (Cross-Platform) -->
+                    <div class="download-option-box">
+                        <div class="download-option-icon" style="background: rgba(59, 130, 246, 0.15); color: #60a5fa;">
+                            <i class="fa-solid fa-mobile-screen-button"></i>
+                        </div>
+                        <div class="download-option-content">
+                            <h4>Install as Web App (PWA)</h4>
+                            <p>Runs offline in full-screen on iPhone, iPad, Android, Mac & Windows with zero app store delays.</p>
+                            <div class="download-actions">
+                                <button type="button" class="btn-primary btn-sm" id="btn-pwa-install-action" onclick="window.installPwaApp()">
+                                    <i class="fa-solid fa-download"></i> Add to Home Screen
+                                </button>
+                            </div>
+                            <div class="pwa-instructions">
+                                <div><strong>iPhone/iPad:</strong> Tap Share <i class="fa-solid fa-arrow-up-from-bracket"></i> in Safari &rarr; <em>Add to Home Screen</em>.</div>
+                                <div><strong>Android/Chrome:</strong> Tap Menu (&vellip;) &rarr; <em>Install App</em>.</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Option 2: Native Android APK -->
+                    <div class="download-option-box">
+                        <div class="download-option-icon" style="background: rgba(16, 185, 129, 0.15); color: #34d399;">
+                            <i class="fa-brands fa-android"></i>
+                        </div>
+                        <div class="download-option-content">
+                            <h4>Direct Android APK (Standalone Native App)</h4>
+                            <p>Compiled native Android binary for Android phones, tablets, or in-dash Android Auto head units.</p>
+                            <div class="download-actions">
+                                <a href="app-debug.apk" download="RVSafeNavigate.apk" class="btn-secondary btn-sm" style="text-decoration:none;">
+                                    <i class="fa-solid fa-file-arrow-down"></i> Download Android APK (9.1 MB)
+                                </a>
+                            </div>
+                            <div class="pwa-instructions" style="margin-top:8px;">
+                                <div><strong>Install via phone browser on same Wi-Fi:</strong> Open Chrome on your phone &amp; go to: <code style="color:#60a5fa;user-select:all;">http://192.168.0.130:8000/app-debug.apk</code></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Option 3: Offline Maps & Route Storage -->
+                    <div class="download-option-box">
+                        <div class="download-option-icon" style="background: rgba(245, 158, 11, 0.15); color: #fbbf24;">
+                            <i class="fa-solid fa-map-location-dot"></i>
+                        </div>
+                        <div class="download-option-content">
+                            <h4>Offline Map & Route Caching</h4>
+                            <p>Download map tiles along your driving routes directly into device storage for remote boondocking without cellular coverage.</p>
+                            <div class="download-actions">
+                                <button type="button" class="btn-secondary btn-sm" id="btn-manage-offline-maps">
+                                    <i class="fa-solid fa-floppy-disk"></i> Manage Offline Saved Maps
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Leaflet JS -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
     
+    <!-- App Configuration & API Keys -->
+    <script src="config.js?v=8"></script>
+    <!-- Native Hardware Bridge & Platform Integration -->
+    <script src="native.js?v=8"></script>
+    <!-- Authentication, Cloud Sync & Subscriptions -->
+    <script src="auth.js?v=8"></script>
     <!-- Application Scripts -->
-    <script src="app.js"></script>
-    <script src="router.js"></script>
-    <script src="parking.js"></script>
+    <script src="weather.js?v=8"></script>
+    <script src="app.js?v=8"></script>
+    <script src="router.js?v=8"></script>
+    <script src="parking.js?v=8"></script>
+
+    <!-- Service Worker Registration & PWA Handlers -->
+    <script>
+        // Only register service worker if not running on local development to avoid stale caching
+        if ('serviceWorker' in navigator && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('./sw.js').then((reg) => {
+                    console.log('[PWA] Service Worker registered successfully:', reg.scope);
+                }).catch((err) => {
+                    console.warn('[PWA] Service Worker registration failed:', err);
+                });
+            });
+        }
+
+        let deferredInstallPrompt = null;
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredInstallPrompt = e;
+            console.log('[PWA] beforeinstallprompt captured.');
+        });
+
+        window.installPwaApp = async function() {
+            if (deferredInstallPrompt) {
+                deferredInstallPrompt.prompt();
+                const choice = await deferredInstallPrompt.userChoice;
+                console.log('[PWA] User response to install:', choice.outcome);
+                deferredInstallPrompt = null;
+            } else {
+                alert('To install on your device:\n\n• iPhone / iPad: Tap Share (square with arrow) in Safari, then select "Add to Home Screen".\n• Android: Tap Chrome menu (3 dots) and select "Install app".\n• Desktop: Click the Install icon in your browser address bar.');
+            }
+        };
+
+        // Wire up download modal opener and closer
+        document.addEventListener('DOMContentLoaded', () => {
+            const openBtns = [document.getElementById('btn-open-download-modal'), document.getElementById('btn-map-download-app')];
+            const closeBtn = document.getElementById('btn-close-download-modal');
+            const modal = document.getElementById('download-app-modal');
+            const manageMapsBtn = document.getElementById('btn-manage-offline-maps');
+
+            openBtns.forEach(btn => {
+                if (btn) btn.addEventListener('click', () => {
+                    if (modal) modal.classList.remove('hidden');
+                });
+            });
+
+            if (closeBtn) {
+                closeBtn.addEventListener('click', () => {
+                    if (modal) modal.classList.add('hidden');
+                });
+            }
+
+            if (modal) {
+                modal.addEventListener('click', (e) => {
+                    if (e.target === modal) modal.classList.add('hidden');
+                });
+            }
+
+            if (manageMapsBtn) {
+                manageMapsBtn.addEventListener('click', () => {
+                    if (modal) modal.classList.add('hidden');
+                    const savedTab = document.querySelector('[data-tab="tab-saved"]');
+                    if (savedTab) savedTab.click();
+                });
+            }
+        });
+    </script>
 </body>
 </html>
